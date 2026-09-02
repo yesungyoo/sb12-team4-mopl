@@ -1,0 +1,21 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:mopl}
+    username: ${DB_USERNAME:mopl}
+    password: ${DB_PASSWORD:}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+external:
+  tmdb:
+    base-url: https://api.themoviedb.org
+    access-token: ${TMDB_ACCESS_TOKEN:}
+
+  sportsdb:
+    base-url: https://www.thesportsdb.com
+    api-key: ${SPORTSDB_API_KEY:}
