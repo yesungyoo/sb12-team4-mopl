@@ -8,6 +8,11 @@ spring:
     username: ${DB_USERNAME:mopl}
     password: ${DB_PASSWORD:}
 
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+
   data:
     redis:
       host: ${REDIS_HOST:localhost}

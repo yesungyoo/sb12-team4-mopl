@@ -8,8 +8,16 @@ spring:
     username: ${DB_USERNAME:mopl}
     password: ${DB_PASSWORD:}
 
+  batch:
+    jdbc:
+      initialize-schema: never
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
 
 external:
   tmdb:

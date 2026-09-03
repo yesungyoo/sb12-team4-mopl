@@ -9,6 +9,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // MySQL / MyBatis
+    implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.5'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // Kafka
+    implementation 'org.springframework.kafka:spring-kafka'
+
     // External API
     implementation 'org.springframework:spring-web'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
