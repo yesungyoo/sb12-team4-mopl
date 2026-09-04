@@ -23,3 +23,8 @@ spring:
 
   elasticsearch:
     uris: ${ELASTICSEARCH_URL:http://localhost:9200}
+
+management:
+  endpoint:
+    health:
+      show-details: always
