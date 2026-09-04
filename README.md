@@ -31,11 +31,15 @@
    ### macOS / Linux
    (새 터미널을 열 때마다 export를 다시 해줘야 합니다)
    ```bash
-   export $(grep -v '^#' .env | xargs)
+   set -a
+   source .env
+   set +a
    ./gradlew :api:bootRun --args='--spring.profiles.active=local'
    ```
    ```bash
-   export $(grep -v '^#' .env | xargs)
+   set -a
+   source .env
+   set +a
    ./gradlew :realtime:bootRun --args='--spring.profiles.active=local'
    ```
 
@@ -51,8 +55,8 @@
    ```
    SPRING_PROFILES_ACTIVE=local
    DB_PASSWORD=...
-   MYSQL_ROOT_PASSWORD=...
-   (.env.example에 있는 나머지 값들도 동일하게)
+   ※ `application-local.yml`에서 기본값이 없는 환경변수만 추가로 등록합니다.
+   ※ `MYSQL_ROOT_PASSWORD`는 Docker Compose용이므로 Spring Run Configuration에는 필요하지 않습니다.
    ```
    이렇게 해두면 이후 그냥 Run 버튼만 눌러도 됩니다.
 
