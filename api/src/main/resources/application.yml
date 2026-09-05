@@ -2,6 +2,9 @@ spring:
   application:
     name: mopl-api
 
+  flyway:
+    enabled: false
+
 server:
   port: ${API_PORT:8080}
 
