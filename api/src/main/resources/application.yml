@@ -9,6 +9,9 @@ spring:
     validate-migration-naming: true
 
   jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
     properties:
       hibernate:
         type:

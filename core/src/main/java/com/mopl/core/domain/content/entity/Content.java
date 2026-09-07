@@ -34,7 +34,7 @@ public class Content extends BaseUpdatableEntity {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "thubnail_url", length = 1000)
+    @Column(name = "thumbnail_url", length = 1000)
     private String thumbnailUrl;
 
     @Enumerated(EnumType.STRING)
