@@ -28,7 +28,7 @@ class SportsDbContentMapperTest {
 
         ExternalContentDto result = mapper.fromEvent(event);
 
-        assertThat(result.type()).isEqualTo("SPORTS");
+        assertThat(result.type()).isEqualTo("SPORT");
         assertThat(result.title())
                 .isEqualTo("Saskatchewan Roughriders vs Winnipeg Blue Bombers");
         assertThat(result.thumbnailUrl())

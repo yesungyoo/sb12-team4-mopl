@@ -9,7 +9,7 @@ import java.util.List;
 @Component
 public class SportsDbContentMapper {
 
-    private static final String CONTENT_TYPE = "SPORTS";
+    private static final String CONTENT_TYPE = "SPORT";
     private static final String EXTERNAL_SOURCE = "THESPORTSDB";
 
     public ExternalContentDto fromEvent(SportsDbEvent event) {
