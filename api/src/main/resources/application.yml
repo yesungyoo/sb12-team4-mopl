@@ -8,6 +8,15 @@ spring:
     validate-on-migrate: true
     validate-migration-naming: true
 
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        type:
+          preferred_uuid_jdbc_type: CHAR
+
 server:
   port: ${API_PORT:8080}
 
