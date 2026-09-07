@@ -18,13 +18,17 @@ public class SportsDbConfig {
     @Qualifier("sportsDbRestClient")
     public RestClient sportDbRestClient(SportsDbProperties properties) {
         return RestClient.builder()
-                .baseUrl(properties.baseUrl() + "/api/v1/json" + properties.apiKey())
+                .baseUrl(
+                        properties.baseUrl()
+                                + "/api/v1/json/"
+                                + properties.apiKey()
+                )
                 .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
 
                 // 401 / 403
                 .defaultStatusHandler(status -> status.value() == HttpStatus.UNAUTHORIZED.value()
                                 || status.value() == HttpStatus.FORBIDDEN.value(), (request, response) -> {
-                            throw new SportsDbApiException(response.getStatusCode(), "TheSportsDb API 인증에 실해팼습니다.");
+                            throw new SportsDbApiException(response.getStatusCode(), "TheSportsDb API 인증에 실패했습니다.");
                         }
                 )
 
