@@ -3,7 +3,10 @@ spring:
     name: mopl-api
 
   flyway:
-    enabled: false
+    enabled: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    validate-migration-naming: true
 
 server:
   port: ${API_PORT:8080}

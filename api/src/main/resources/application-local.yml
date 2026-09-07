@@ -8,12 +8,6 @@ spring:
     username: ${DB_USERNAME:mopl}
     password: ${DB_PASSWORD:}
 
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    validate-on-migrate: true
-    validate-migration-naming: true
-
   jpa:
     hibernate:
       ddl-auto: none
