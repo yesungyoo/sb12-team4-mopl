@@ -331,8 +331,8 @@ CREATE TABLE conversations
     CONSTRAINT uq_conversations_users
         UNIQUE (user1_id, user2_id),
 
-    CONSTRAINT chk_conversations_different_users
-        CHECK (user1_id <> user2_id)
+    CONSTRAINT chk_conversations_canonical_order
+        CHECK (user1_id < user2_id)
 );
 
 
