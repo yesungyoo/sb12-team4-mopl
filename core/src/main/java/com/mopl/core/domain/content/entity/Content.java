@@ -85,6 +85,38 @@ public class Content extends BaseUpdatableEntity {
         this.externalVoteCount = externalVoteCount;
     }
 
+    public void update(
+            ContentType type,
+            String title,
+            String description,
+            String thumbnailUrl,
+            LocalDate releaseDate
+    ) {
+        if (type != null) {
+            this.type = type;
+        }
+
+        if (title != null) {
+            this.title = title;
+        }
+
+        if (description != null) {
+            this.description = description;
+        }
+
+        if (thumbnailUrl != null) {
+            this.thumbnailUrl = thumbnailUrl;
+        }
+
+        if (releaseDate != null) {
+            this.releaseDate = releaseDate;
+        }
+    }
+
+    public void delete() {
+        this.deletedAt = LocalDateTime.now();
+    }
+
     public UUID getId() {
         return id;
     }

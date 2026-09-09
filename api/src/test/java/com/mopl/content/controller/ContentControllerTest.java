@@ -1,0 +1,248 @@
+package com.mopl.content.controller;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mopl.common.exception.content.ContentNotFoundException;
+import com.mopl.content.dto.ContentCreateRequest;
+import com.mopl.content.dto.ContentListResponse;
+import com.mopl.content.dto.ContentResponse;
+import com.mopl.content.dto.ContentUpdateRequest;
+import com.mopl.content.service.ContentService;
+import com.mopl.core.common.enums.ContentType;
+import com.mopl.core.common.enums.ExternalSource;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@WebMvcTest(ContentController.class)
+class ContentControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @MockitoBean
+    private ContentService contentService;
+
+    @Test
+    @DisplayName("콘텐츠 단건 조회에 성공하면 200을 반환한다")
+    void getContentSuccess() throws Exception {
+        UUID contentId = UUID.randomUUID();
+        ContentResponse response = createResponse(contentId, "테스트 영화");
+
+        when(contentService.getContent(contentId))
+                .thenReturn(response);
+
+        mockMvc.perform(get("/contents/{contentId}", contentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(contentId.toString()))
+                .andExpect(jsonPath("$.title").value("테스트 영화"))
+                .andExpect(jsonPath("$.externalSource").value("MANUAL"));
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 콘텐츠를 조회하면 404를 반환한다")
+    void getContentNotFound() throws Exception {
+        UUID contentId = UUID.randomUUID();
+
+        when(contentService.getContent(contentId))
+                .thenThrow(new ContentNotFoundException());
+
+        mockMvc.perform(get("/contents/{contentId}", contentId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("CONTENT_001"))
+                .andExpect(jsonPath("$.message").value("콘텐츠를 찾을 수 없습니다."));
+    }
+
+    @Test
+    @DisplayName("콘텐츠 목록 조회에 성공하면 200을 반환한다")
+    void getContentsSuccess() throws Exception {
+        ContentResponse firstContent = createResponse(
+                UUID.randomUUID(),
+                "테스트 영화 A"
+        );
+
+        ContentResponse secondContent = createResponse(
+                UUID.randomUUID(),
+                "테스트 영화 B"
+        );
+
+        ContentListResponse response = new ContentListResponse(
+                List.of(firstContent, secondContent),
+                0,
+                20,
+                2,
+                1
+        );
+
+        when(contentService.getContents(any()))
+                .thenReturn(response);
+
+        mockMvc.perform(get("/contents"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contents.length()").value(2))
+                .andExpect(jsonPath("$.contents[0].title").value("테스트 영화 A"))
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @Test
+    @DisplayName("콘텐츠를 수동 등록하면 201을 반환한다")
+    void createContentSuccess() throws Exception {
+        UUID contentId = UUID.randomUUID();
+
+        ContentCreateRequest request = new ContentCreateRequest(
+                ContentType.MOVIE,
+                "관리자 등록 영화",
+                "테스트 설명",
+                "https://example.com/image.jpg",
+                LocalDate.of(2026, 9, 8)
+        );
+
+        ContentResponse response = createResponse(
+                contentId,
+                "관리자 등록 영화"
+        );
+
+        when(contentService.createContent(any(ContentCreateRequest.class)))
+                .thenReturn(response);
+
+        mockMvc.perform(
+                        post("/contents")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(request))
+                )
+                .andExpect(status().isCreated())
+                .andExpect(
+                        header().string(
+                                "Location",
+                                "/contents/" + contentId
+                        )
+                )
+                .andExpect(jsonPath("$.title").value("관리자 등록 영화"))
+                .andExpect(jsonPath("$.externalSource").value("MANUAL"));
+    }
+
+    @Test
+    @DisplayName("콘텐츠 등록 시 제목이 비어 있으면 400을 반환한다")
+    void createContentInvalidTitle() throws Exception {
+        String request = """
+            {
+                "type": "MOVIE",
+                "title": ""
+            }
+            """;
+
+        mockMvc.perform(
+                        post("/contents")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(request)
+                )
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_001"));
+    }
+
+    @Test
+    @DisplayName("콘텐츠 수정에 성공하면 200을 반환한다")
+    void updateContentSuccess() throws Exception {
+        UUID contentId = UUID.randomUUID();
+
+        ContentUpdateRequest request = new ContentUpdateRequest(
+                null,
+                "수정된 영화",
+                null,
+                null,
+                null
+        );
+
+        ContentResponse response = createResponse(
+                contentId,
+                "수정된 영화"
+        );
+
+        when(
+                contentService.updateContent(
+                        eq(contentId),
+                        any(ContentUpdateRequest.class)
+                )
+        ).thenReturn(response);
+
+        mockMvc.perform(
+                        patch("/contents/{contentId}", contentId)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(request))
+                )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("수정된 영화"));
+    }
+
+    @Test
+    @DisplayName("콘텐츠 수정 요청이 비어 있으면 400을 반환한다")
+    void updateContentEmptyRequest() throws Exception {
+        mockMvc.perform(
+                        patch("/contents/{contentId}", UUID.randomUUID())
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{}")
+                )
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_001"));
+    }
+
+    @Test
+    @DisplayName("콘텐츠 삭제에 성공하면 204를 반환한다")
+    void deleteContentSuccess() throws Exception {
+        UUID contentId = UUID.randomUUID();
+
+        doNothing()
+                .when(contentService)
+                .deleteContent(contentId);
+
+        mockMvc.perform(delete("/contents/{contentId}", contentId))
+                .andExpect(status().isNoContent());
+    }
+
+    private ContentResponse createResponse(
+            UUID contentId,
+            String title
+    ) {
+        return new ContentResponse(
+                contentId,
+                ContentType.MOVIE,
+                title,
+                "테스트 설명",
+                null,
+                ExternalSource.MANUAL,
+                null,
+                LocalDate.of(2026, 9, 8),
+                null,
+                null,
+                null,
+                LocalDateTime.of(2026, 9, 8, 12, 0),
+                LocalDateTime.of(2026, 9, 8, 12, 0)
+        );
+    }
+}
