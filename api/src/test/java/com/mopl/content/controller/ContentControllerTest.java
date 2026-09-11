@@ -2,10 +2,7 @@ package com.mopl.content.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.ContentCreateRequest;
-import com.mopl.content.dto.ContentListResponse;
-import com.mopl.content.dto.ContentResponse;
-import com.mopl.content.dto.ContentUpdateRequest;
+import com.mopl.content.dto.*;
 import com.mopl.content.service.ContentService;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
@@ -19,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -98,8 +96,11 @@ class ContentControllerTest {
                 1
         );
 
-        when(contentService.getContents(any()))
-                .thenReturn(response);
+        when(contentService.getContents(
+                        any(ContentSearchCondition.class),
+                        any(Pageable.class)
+                )
+        ).thenReturn(response);
 
         mockMvc.perform(get("/contents"))
                 .andExpect(status().isOk())

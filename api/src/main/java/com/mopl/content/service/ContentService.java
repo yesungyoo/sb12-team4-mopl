@@ -1,10 +1,7 @@
 package com.mopl.content.service;
 
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.ContentCreateRequest;
-import com.mopl.content.dto.ContentListResponse;
-import com.mopl.content.dto.ContentResponse;
-import com.mopl.content.dto.ContentUpdateRequest;
+import com.mopl.content.dto.*;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
@@ -34,9 +31,9 @@ public class ContentService {
     }
 
     // 목록 조회
-    public ContentListResponse getContents(Pageable pageable) {
+    public ContentListResponse getContents(ContentSearchCondition condition, Pageable pageable) {
         Page<ContentResponse> contentPage = contentRepository
-                .findAllByDeletedAtIsNull(pageable)
+                .search(condition, pageable)
                 .map(ContentResponse::from);
 
         return ContentListResponse.from(contentPage);

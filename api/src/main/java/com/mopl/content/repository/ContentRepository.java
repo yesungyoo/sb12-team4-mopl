@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface ContentRepository extends JpaRepository<Content, UUID> {
+public interface ContentRepository extends JpaRepository<Content, UUID>, ContentRepositoryCustom {
 
     Optional<Content> findByIdAndDeletedAtIsNull(UUID id);
 

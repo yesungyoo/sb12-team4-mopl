@@ -1,9 +1,6 @@
 package com.mopl.content.controller;
 
-import com.mopl.content.dto.ContentCreateRequest;
-import com.mopl.content.dto.ContentListResponse;
-import com.mopl.content.dto.ContentResponse;
-import com.mopl.content.dto.ContentUpdateRequest;
+import com.mopl.content.dto.*;
 import com.mopl.content.service.ContentService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
@@ -34,8 +31,9 @@ public class ContentController {
 
     @GetMapping
     public ResponseEntity<ContentListResponse> getContents(
+            @ModelAttribute ContentSearchCondition condition,
             @PageableDefault(size = 20, sort = "createdAt", direction = DESC) Pageable pageable) {
-        ContentListResponse response = contentService.getContents(pageable);
+        ContentListResponse response = contentService.getContents(condition, pageable);
 
         return ResponseEntity.ok(response);
     }

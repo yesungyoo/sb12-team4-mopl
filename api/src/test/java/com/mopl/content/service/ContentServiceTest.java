@@ -1,10 +1,7 @@
 package com.mopl.content.service;
 
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.ContentCreateRequest;
-import com.mopl.content.dto.ContentListResponse;
-import com.mopl.content.dto.ContentResponse;
-import com.mopl.content.dto.ContentUpdateRequest;
+import com.mopl.content.dto.*;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
@@ -82,6 +79,8 @@ class ContentServiceTest {
         Pageable pageable = PageRequest.of(0, 20);
         Content firstContent = createContent("테스트 영화 A");
         Content secondContent = createContent("테스트 영화 B");
+        ContentSearchCondition condition = new ContentSearchCondition(
+                null, null, null, null);
 
         Page<Content> contentPage = new PageImpl<>(
                 List.of(firstContent, secondContent),
@@ -89,10 +88,11 @@ class ContentServiceTest {
                 2
         );
 
-        when(contentRepository.findAllByDeletedAtIsNull(pageable))
+        when(contentRepository.search(condition, pageable))
                 .thenReturn(contentPage);
 
-        ContentListResponse response = contentService.getContents(pageable);
+
+        ContentListResponse response = contentService.getContents(condition, pageable);
 
         assertThat(response.contents()).hasSize(2);
         assertThat(response.contents().get(0).title()).isEqualTo("테스트 영화 A");
