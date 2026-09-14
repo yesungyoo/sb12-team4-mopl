@@ -9,16 +9,29 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum PlaylistErrorCode implements ErrorCode {
 
-    // 예시
-    // CONTENT_NOT_FOUND(
-    //         HttpStatus.NOT_FOUND,
-    //         "PLAYLIST_001",
-    //         "콘텐츠를 찾을 수 없습니다."
-    // );
+	PLAYLIST_NOT_FOUND(
+		HttpStatus.NOT_FOUND,
+		"PLAYLIST_001",
+		"플레이리스트를 찾을 수 없습니다."
+	),
+	PLAYLIST_ACCESS_DENIED(
+		HttpStatus.FORBIDDEN,
+		"PLAYLIST_002",
+		"플레이리스트에 대한 권한이 없습니다."
+	),
+	PLAYLIST_CONTENT_ALREADY_EXISTS(
+		HttpStatus.BAD_REQUEST,
+		"PLAYLIST_003",
+		"이미 추가된 콘텐츠입니다."
+	),
+	PLAYLIST_CONTENT_NOT_FOUND(
+		HttpStatus.NOT_FOUND,
+		"PLAYLIST_004",
+		"플레이리스트에 해당 콘텐츠가 없습니다."
+	);
 
-    ;
 
-    private final HttpStatus status;
-    private final String code;
-    private final String message;
+	private final HttpStatus status;
+	private final String code;
+	private final String message;
 }

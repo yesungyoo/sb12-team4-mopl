@@ -42,6 +42,15 @@ public class Playlist extends BaseUpdatableEntity {
         this.description = description;
     }
 
+	public void update(String title, String description) {
+		if (title != null) {
+			this.title = title;
+		}
+		if (description != null) {
+			this.description = description;
+		}
+	}
+
     public UUID getId() {
         return id;
     }
