@@ -15,11 +15,14 @@ import com.mopl.core.domain.user.entity.User;
 import com.mopl.playlist.dto.*;
 import com.mopl.playlist.repository.PlaylistContentRepository;
 import com.mopl.playlist.repository.PlaylistRepository;
+import com.mopl.playlist.repository.PlaylistSubscriptionRepository;
+
 import jakarta.persistence.EntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -35,6 +38,7 @@ public class PlaylistService {
 	private final EntityManager entityManager;
 	private final PlaylistContentRepository playlistContentRepository;
 	private final ContentRepository contentRepository;
+	private final PlaylistSubscriptionRepository playlistSubscriptionRepository;
 
 	private List<Content> getContentsOf(UUID playlistId) {
 		return playlistContentRepository.findAllByPlaylistId(playlistId).stream()
@@ -46,21 +50,29 @@ public class PlaylistService {
 		PlaylistRepository playlistRepository,
 		EntityManager entityManager,
 		PlaylistContentRepository playlistContentRepository,
-		ContentRepository contentRepository
+		ContentRepository contentRepository,
+		PlaylistSubscriptionRepository playlistSubscriptionRepository
 	) {
 		this.playlistRepository = playlistRepository;
 		this.entityManager = entityManager;
 		this.playlistContentRepository = playlistContentRepository;
 		this.contentRepository = contentRepository;
+		this.playlistSubscriptionRepository = playlistSubscriptionRepository;
 	}
 
-	public PlaylistResponse getPlaylist(UUID playlistId) {
+	public PlaylistResponse getPlaylist(UUID playlistId, UUID requesterId) {
 		Playlist playlist = findPlaylistOrThrow(playlistId);
-		return PlaylistResponse.from(playlist, getContentsOf(playlistId));
+		List<Content> contents = getContentsOf(playlistId);
+		long subscriberCount = playlistSubscriptionRepository.countByPlaylistId(playlistId);
+		boolean subscribedByMe = requesterId != null
+			&& playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, requesterId);
+
+		return PlaylistResponse.from(playlist, contents, subscriberCount, subscribedByMe);
 	}
 
 	public PlaylistListResponse getPlaylists(
-		String cursor, UUID idAfter, int limit, String sortByParam, String sortDirectionParam
+		String cursor, UUID idAfter, int limit, String sortByParam, String sortDirectionParam,
+		UUID requesterId, UUID subscriberIdEqual
 	) {
 		if (limit <= 0) {
 			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
@@ -74,7 +86,7 @@ public class PlaylistService {
 		SortDirection sortDirection = SortDirection.from(sortDirectionParam);
 
 		List<Playlist> playlists = playlistRepository.findAllByCursor(
-			cursor, idAfter, safeLimit + 1, sortBy, sortDirection
+			cursor, idAfter, safeLimit + 1, sortBy, sortDirection, subscriberIdEqual
 		);
 
 		boolean hasNext = playlists.size() > safeLimit;
@@ -87,11 +99,11 @@ public class PlaylistService {
 			nextIdAfter = last.getId();
 			nextCursor = sortBy == PlaylistSortBy.UPDATED_AT
 				? last.getUpdatedAt().toString()
-				: "0";
+				: String.valueOf(playlistSubscriptionRepository.countByPlaylistId(last.getId()));
 		}
 
-		List<PlaylistResponse> data = mapToResponsesWithContents(pageContent);
-		long totalCount = playlistRepository.count();
+		List<PlaylistResponse> data = mapToResponsesWithContents(pageContent, requesterId);
+		long totalCount = playlistRepository.countAllMatching(subscriberIdEqual);
 
 		return new PlaylistListResponse(
 			data, nextCursor, nextIdAfter, hasNext, sortByParam, sortDirectionParam, totalCount
@@ -127,7 +139,11 @@ public class PlaylistService {
 		playlist.update(request.title(), request.description());
 		entityManager.flush();
 
-		return PlaylistResponse.from(playlist, getContentsOf(playlistId));
+		long subscriberCount = playlistSubscriptionRepository.countByPlaylistId(playlistId);
+		boolean subscribedByMe = playlistSubscriptionRepository
+			.existsByPlaylistIdAndSubscriberId(playlistId, requesterId);
+
+		return PlaylistResponse.from(playlist, getContentsOf(playlistId), subscriberCount, subscribedByMe);
 	}
 
 	@Transactional
@@ -168,7 +184,7 @@ public class PlaylistService {
 		playlistContentRepository.delete(playlistContent);
 	}
 
-	private List<PlaylistResponse> mapToResponsesWithContents(List<Playlist> playlists) {
+	private List<PlaylistResponse> mapToResponsesWithContents(List<Playlist> playlists, UUID requesterId) {
 		List<UUID> playlistIds = playlists.stream().map(Playlist::getId).toList();
 
 		Map<UUID, List<Content>> contentsByPlaylistId = playlistContentRepository
@@ -178,10 +194,18 @@ public class PlaylistService {
 				Collectors.mapping(PlaylistContent::getContent, Collectors.toList())
 			));
 
+		Map<UUID, Long> subscriberCountByPlaylistId = playlistSubscriptionRepository.countByPlaylistIdIn(playlistIds);
+
+		Set<UUID> subscribedPlaylistIds = requesterId != null
+			? playlistSubscriptionRepository.findSubscribedPlaylistIds(playlistIds, requesterId)
+			: Set.of();
+
 		return playlists.stream()
 			.map(playlist -> PlaylistResponse.from(
 				playlist,
-				contentsByPlaylistId.getOrDefault(playlist.getId(), List.of())
+				contentsByPlaylistId.getOrDefault(playlist.getId(), List.of()),
+				subscriberCountByPlaylistId.getOrDefault(playlist.getId(), 0L),
+				subscribedPlaylistIds.contains(playlist.getId())
 			))
 			.toList();
 	}

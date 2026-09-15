@@ -69,7 +69,7 @@ class PlaylistControllerTest {
 		@Test
 		@DisplayName("존재하는 플레이리스트를 조회하면 200과 본문을 반환한다")
 		void success() throws Exception {
-			when(playlistService.getPlaylist(playlistId)).thenReturn(sampleResponse);
+			when(playlistService.getPlaylist(eq(playlistId), any())).thenReturn(sampleResponse);
 
 			mockMvc.perform(get("/playlists/{playlistId}", playlistId))
 				.andExpect(status().isOk())
@@ -80,7 +80,7 @@ class PlaylistControllerTest {
 		@Test
 		@DisplayName("존재하지 않는 플레이리스트를 조회하면 404와 오류 코드를 반환한다")
 		void notFound() throws Exception {
-			when(playlistService.getPlaylist(playlistId)).thenThrow(new PlaylistNotFoundException());
+			when(playlistService.getPlaylist(eq(playlistId), any())).thenThrow(new PlaylistNotFoundException());
 
 			mockMvc.perform(get("/playlists/{playlistId}", playlistId))
 				.andExpect(status().isNotFound())
@@ -99,7 +99,7 @@ class PlaylistControllerTest {
 				List.of(sampleResponse), null, null, false,
 				"updatedAt", "DESCENDING", 1L
 			);
-			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING")))
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), any()))
 				.thenReturn(response);
 
 			mockMvc.perform(get("/playlists")
@@ -120,6 +120,26 @@ class PlaylistControllerTest {
 					.param("sortBy", "updatedAt")
 					.param("sortDirection", "DESCENDING"))
 				.andExpect(status().isBadRequest());
+		}
+
+		@Test
+		@DisplayName("subscriberIdEqual 파라미터를 서비스에 전달한다")
+		void success_withSubscriberIdEqual() throws Exception {
+			UUID subscriberIdEqual = UUID.randomUUID();
+			PlaylistListResponse response = new PlaylistListResponse(
+				List.of(sampleResponse), null, null, false,
+				"updatedAt", "DESCENDING", 1L
+			);
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), eq(subscriberIdEqual)))
+				.thenReturn(response);
+
+			mockMvc.perform(get("/playlists")
+					.param("limit", "20")
+					.param("sortBy", "updatedAt")
+					.param("sortDirection", "DESCENDING")
+					.param("subscriberIdEqual", subscriberIdEqual.toString()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalCount").value(1));
 		}
 	}
 

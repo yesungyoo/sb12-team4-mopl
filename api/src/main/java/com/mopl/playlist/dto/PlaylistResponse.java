@@ -20,11 +20,12 @@ public record PlaylistResponse(
 	boolean subscribedByMe,
 	List<ContentSummary> contents
 ) {
+	// 구독 정보가 무의미한 경우용 (0건/미구독 확정)
 	public static PlaylistResponse from(Playlist playlist) {
-		return from(playlist, Collections.emptyList());
+		return from(playlist, Collections.emptyList(), 0L, false);
 	}
 
-	public static PlaylistResponse from(Playlist playlist, List<Content> contents) {
+	public static PlaylistResponse from(Playlist playlist, List<Content> contents, long subscriberCount, boolean subscribedByMe) {
 		List<ContentSummary> contentSummaries = contents.stream()
 			.filter(content -> content.getDeletedAt() == null) // soft delete된 콘텐츠 제외
 			.map(ContentSummary::from)
@@ -38,8 +39,8 @@ public record PlaylistResponse(
 			playlist.getTitle(),
 			playlist.getDescription(),
 			playlist.getUpdatedAt(),
-			0L,     // TODO: 구독 이슈에서 실제 집계로 교체
-			false,  // TODO: 구독 이슈에서 실제 값으로 교체
+			subscriberCount,
+			subscribedByMe,
 			contentSummaries
 		);
 	}

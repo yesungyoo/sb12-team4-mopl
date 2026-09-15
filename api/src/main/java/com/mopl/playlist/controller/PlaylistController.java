@@ -23,8 +23,11 @@ public class PlaylistController {
 	}
 
 	@GetMapping("/{playlistId}")
-	public ResponseEntity<PlaylistResponse> getPlaylist(@PathVariable UUID playlistId) {
-		PlaylistResponse response = playlistService.getPlaylist(playlistId);
+	public ResponseEntity<PlaylistResponse> getPlaylist(
+		@PathVariable UUID playlistId,
+		@RequestParam(required = false) UUID requesterId // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
+	) {
+		PlaylistResponse response = playlistService.getPlaylist(playlistId, requesterId);
 
 		return ResponseEntity.ok(response);
 	}
@@ -35,10 +38,12 @@ public class PlaylistController {
 		@RequestParam(required = false) UUID idAfter,
 		@RequestParam int limit,
 		@RequestParam String sortBy,
-		@RequestParam String sortDirection
+		@RequestParam String sortDirection,
+		@RequestParam(required = false) UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
+		@RequestParam(required = false) UUID subscriberIdEqual
 	) {
 		PlaylistListResponse response = playlistService.getPlaylists(
-			cursor, idAfter, limit, sortBy, sortDirection
+			cursor, idAfter, limit, sortBy, sortDirection, requesterId, subscriberIdEqual
 		);
 
 		return ResponseEntity.ok(response);

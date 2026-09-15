@@ -2,11 +2,15 @@ package com.mopl.playlist.repository;
 
 import com.mopl.core.domain.playlist.entity.Playlist;
 import com.mopl.core.domain.playlist.entity.QPlaylist;
+import com.mopl.core.domain.playlist.entity.QPlaylistSubscription;
 import com.mopl.playlist.dto.PlaylistSortBy;
 import com.mopl.playlist.dto.SortDirection;
 import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.types.OrderSpecifier;
+import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.core.types.dsl.NumberExpression;
+import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import com.mopl.common.exception.CommonErrorCode;
 import com.mopl.common.exception.MoplException;
@@ -20,9 +24,32 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 
 	private final JPAQueryFactory queryFactory;
 	private static final QPlaylist playlist = QPlaylist.playlist;
+	private static final QPlaylistSubscription subscription = QPlaylistSubscription.playlistSubscription;
 
 	public PlaylistRepositoryImpl(JPAQueryFactory queryFactory) {
 		this.queryFactory = queryFactory;
+	}
+
+	// playlist_subscriptions를 COUNT한 서브쿼리 표현식
+	private NumberExpression<Long> subscribeCountExpr() {
+		return Expressions.asNumber(
+			queryFactory
+				.select(subscription.count())
+				.from(subscription)
+				.where(subscription.playlist.id.eq(playlist.id))
+		);
+	}
+
+	// subscriberIdEqual이 주어졌을 때, 해당 사용자가 구독한 플레이리스트만 걸러내는 조건
+	private BooleanExpression subscriberEqualCondition(UUID subscriberIdEqual) {
+		return JPAExpressions
+			.selectOne()
+			.from(subscription)
+			.where(
+				subscription.playlist.id.eq(playlist.id)
+					.and(subscription.subscriber.id.eq(subscriberIdEqual))
+			)
+			.exists();
 	}
 
 	@Override
@@ -31,7 +58,8 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 		UUID idAfter,
 		int limitPlusOne,
 		PlaylistSortBy sortBy,
-		SortDirection sortDirection
+		SortDirection sortDirection,
+		UUID subscriberIdEqual
 	) {
 		boolean isDesc = sortDirection == SortDirection.DESCENDING;
 
@@ -39,6 +67,9 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 
 		if (cursor != null && idAfter != null) {
 			condition.and(buildCursorCondition(sortBy, isDesc, cursor, idAfter));
+		}
+		if (subscriberIdEqual != null) {
+			condition.and(subscriberEqualCondition(subscriberIdEqual));
 		}
 
 		return queryFactory
@@ -50,7 +81,22 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 			.fetch();
 	}
 
-	// subscriberCount는 아직 컬럼이 없어 항상 0 취급 -> id 기준으로만 정렬/커서 처리
+	@Override
+	public long countAllMatching(UUID subscriberIdEqual) {
+		BooleanBuilder condition = new BooleanBuilder();
+		if (subscriberIdEqual != null) {
+			condition.and(subscriberEqualCondition(subscriberIdEqual));
+		}
+
+		Long count = queryFactory
+			.select(playlist.count())
+			.from(playlist)
+			.where(condition)
+			.fetchOne();
+
+		return count != null ? count : 0L;
+	}
+
 	private BooleanBuilder buildCursorCondition(PlaylistSortBy sortBy, boolean isDesc, String cursor, UUID idAfter) {
 		BooleanBuilder builder = new BooleanBuilder();
 
@@ -63,6 +109,17 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 			} else {
 				builder.or(playlist.updatedAt.gt(cursorValue));
 				builder.or(playlist.updatedAt.eq(cursorValue).and(playlist.id.gt(idAfter)));
+			}
+		} else if (sortBy == PlaylistSortBy.SUBSCRIBE_COUNT) {
+			long cursorValue = parseCursorAsLong(cursor);
+			NumberExpression<Long> countExpr = subscribeCountExpr();
+
+			if (isDesc) {
+				builder.or(countExpr.lt(cursorValue));
+				builder.or(countExpr.eq(cursorValue).and(playlist.id.lt(idAfter)));
+			} else {
+				builder.or(countExpr.gt(cursorValue));
+				builder.or(countExpr.eq(cursorValue).and(playlist.id.gt(idAfter)));
 			}
 		} else {
 			if (isDesc) {
@@ -83,6 +140,14 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 		}
 	}
 
+	private long parseCursorAsLong(String cursor) {
+		try {
+			return Long.parseLong(cursor);
+		} catch (NumberFormatException e) {
+			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+		}
+	}
+
 	private OrderSpecifier<?>[] buildOrderSpecifiers(PlaylistSortBy sortBy, boolean isDesc) {
 		if (sortBy == PlaylistSortBy.UPDATED_AT) {
 			return new OrderSpecifier[]{
@@ -90,7 +155,13 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 				isDesc ? playlist.id.desc() : playlist.id.asc()
 			};
 		}
-		// SUBSCRIBE_COUNT: 집계 컬럼이 없어 현재는 id로만 정렬 (후속 이슈에서 실제 컬럼/집계 추가 시 교체)
+		if (sortBy == PlaylistSortBy.SUBSCRIBE_COUNT) {
+			NumberExpression<Long> countExpr = subscribeCountExpr();
+			return new OrderSpecifier[]{
+				isDesc ? countExpr.desc() : countExpr.asc(),
+				isDesc ? playlist.id.desc() : playlist.id.asc()
+			};
+		}
 		return new OrderSpecifier[]{
 			isDesc ? playlist.id.desc() : playlist.id.asc()
 		};
