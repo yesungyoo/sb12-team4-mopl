@@ -2,6 +2,7 @@ package com.mopl.batch.content.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -21,6 +22,7 @@ import com.mopl.batch.external.common.dto.ExternalContentDto;
 
 @Testcontainers
 @SpringBootTest(properties = {
+        "spring.batch.job.enabled=false",
         "spring.data.redis.host=localhost",
         "spring.data.redis.port=6379",
         "spring.flyway.enabled-true"
@@ -33,7 +35,8 @@ class ContentBulkRepositoryIntegrationTest {
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
             .withDatabaseName("mopl")
             .withUsername("mopl")
-            .withPassword("test");
+            .withPassword("test")
+            .withStartupTimeout(Duration.ofMinutes(5));
 
     @DynamicPropertySource
     static void configureDatasource(DynamicPropertyRegistry registry) {
@@ -215,5 +218,40 @@ class ContentBulkRepositoryIntegrationTest {
                 100L,
                 List.of(28, 12)
         );
+    }
+
+    @Test
+    void bulkUpsertKeepsMovieAndTvWithSameExternalIdSeparate() {
+        ExternalContentDto movie = createContent(
+                "MOVIE",
+                "동일 ID 영화",
+                "TMDB",
+                "same-id-001",
+                100.0,
+                4.5
+        );
+
+        ExternalContentDto tv = createContent(
+                "TV_SERIES",
+                "동일 ID TV",
+                "TMDB",
+                "same-id-001",
+                90.0,
+                4.2
+        );
+
+        contentBulkRepository.upsertAll(List.of(movie, tv));
+
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                        SELECT COUNT(*)
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND external_id = 'same-id-001'
+                        """,
+                Integer.class
+        );
+
+        assertThat(count).isEqualTo(2);
     }
 }
