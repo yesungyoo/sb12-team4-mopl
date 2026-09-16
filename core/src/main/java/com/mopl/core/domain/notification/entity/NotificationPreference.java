@@ -55,4 +55,12 @@ public class NotificationPreference extends BaseUpdatableEntity {
     public boolean isEnabled() {
         return enabled;
     }
+
+    public void turnOn() {
+        this.enabled = true;
+    }
+
+    public void turnOff() {
+        this.enabled = false;
+    }
 }
