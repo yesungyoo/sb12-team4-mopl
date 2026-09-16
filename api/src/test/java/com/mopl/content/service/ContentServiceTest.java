@@ -3,6 +3,7 @@ package com.mopl.content.service;
 import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.content.dto.*;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.service.ContentSearchService;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
@@ -19,8 +20,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
@@ -36,11 +36,21 @@ class ContentServiceTest {
     @Mock
     private ContentRepository contentRepository;
 
+    @Mock
+    private ContentSearchService contentSearchService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private ContentService contentService;
 
     @BeforeEach
     void setUp() {
-        contentService = new ContentService(contentRepository);
+        contentService = new ContentService(
+                contentRepository,
+                contentSearchService,
+                eventPublisher
+        );
     }
 
     @Test
@@ -79,28 +89,42 @@ class ContentServiceTest {
         Pageable pageable = PageRequest.of(0, 20);
         Content firstContent = createContent("테스트 영화 A");
         Content secondContent = createContent("테스트 영화 B");
-        ContentSearchCondition condition = new ContentSearchCondition(
-                null, null, null, null);
 
-        Page<Content> contentPage = new PageImpl<>(
-                List.of(firstContent, secondContent),
-                pageable,
-                2
+        ContentSearchCondition condition = new ContentSearchCondition(
+                null,
+                null,
+                null,
+                null
         );
 
-        when(contentRepository.search(condition, pageable))
-                .thenReturn(contentPage);
+        ContentListResponse searchResponse = new ContentListResponse(
+                List.of(
+                        ContentResponse.from(firstContent),
+                        ContentResponse.from(secondContent)
+                ),
+                0,
+                20,
+                2,
+                1
+        );
 
+        when(contentSearchService.search(condition, pageable))
+                .thenReturn(searchResponse);
 
-        ContentListResponse response = contentService.getContents(condition, pageable);
+        ContentListResponse response =
+                contentService.getContents(condition, pageable);
 
         assertThat(response.contents()).hasSize(2);
-        assertThat(response.contents().get(0).title()).isEqualTo("테스트 영화 A");
-        assertThat(response.contents().get(1).title()).isEqualTo("테스트 영화 B");
+        assertThat(response.contents().get(0).title())
+                .isEqualTo("테스트 영화 A");
+        assertThat(response.contents().get(1).title())
+                .isEqualTo("테스트 영화 B");
         assertThat(response.page()).isZero();
         assertThat(response.size()).isEqualTo(20);
         assertThat(response.totalElements()).isEqualTo(2);
         assertThat(response.totalPages()).isEqualTo(1);
+
+        verify(contentSearchService).search(condition, pageable);
     }
 
     @Test

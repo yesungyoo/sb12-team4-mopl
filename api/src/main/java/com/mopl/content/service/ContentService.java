@@ -1,11 +1,18 @@
 package com.mopl.content.service;
 
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.*;
+import com.mopl.content.dto.ContentCreateRequest;
+import com.mopl.content.dto.ContentListResponse;
+import com.mopl.content.dto.ContentResponse;
+import com.mopl.content.dto.ContentSearchCondition;
+import com.mopl.content.dto.ContentUpdateRequest;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.event.ContentSearchSyncEvent;
+import com.mopl.content.search.service.ContentSearchService;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
-import org.springframework.data.domain.Page;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,14 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.UUID;
 
 @Service
+@RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ContentService {
 
     private final ContentRepository contentRepository;
-
-    public ContentService(ContentRepository contentRepository) {
-        this.contentRepository = contentRepository;
-    }
+    private final ContentSearchService contentSearchService;
+    private final ApplicationEventPublisher eventPublisher;
 
     // 단건 조회
     public ContentResponse getContent(UUID contentId) {
@@ -32,11 +38,7 @@ public class ContentService {
 
     // 목록 조회
     public ContentListResponse getContents(ContentSearchCondition condition, Pageable pageable) {
-        Page<ContentResponse> contentPage = contentRepository
-                .search(condition, pageable)
-                .map(ContentResponse::from);
-
-        return ContentListResponse.from(contentPage);
+        return contentSearchService.search(condition, pageable);
     }
 
     // 콘텐츠 등록 (관리자 전용)
@@ -57,6 +59,10 @@ public class ContentService {
 
         Content savedContent = contentRepository.save(content);
 
+        eventPublisher.publishEvent(
+                new ContentSearchSyncEvent(savedContent.getId(), false)
+        );
+
         return ContentResponse.from(savedContent);
     }
 
@@ -74,6 +80,10 @@ public class ContentService {
                 request.releaseDate()
         );
 
+        eventPublisher.publishEvent(
+                new ContentSearchSyncEvent(content.getId(), false)
+        );
+
         return ContentResponse.from(content);
     }
 
@@ -83,5 +93,9 @@ public class ContentService {
                 .orElseThrow(ContentNotFoundException::new);
 
         content.delete();
+
+        eventPublisher.publishEvent(
+                new ContentSearchSyncEvent(content.getId(), true)
+        );
     }
 }
