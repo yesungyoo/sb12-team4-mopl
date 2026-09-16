@@ -151,11 +151,11 @@ class PlaylistServiceTest {
 		@DisplayName("limit이 0 이하면 예외가 발생한다")
 		void limitZeroOrNegative_throws() {
 			assertThatThrownBy(() ->
-				playlistService.getPlaylists(null, null, 0, "updatedAt", "DESCENDING", null, null)
+				playlistService.getPlaylists(null, null, 0, "updatedAt", "DESCENDING", null, null, null, null)
 			).isInstanceOf(MoplException.class);
 
 			assertThatThrownBy(() ->
-				playlistService.getPlaylists(null, null, -1, "updatedAt", "DESCENDING", null, null)
+				playlistService.getPlaylists(null, null, -1, "updatedAt", "DESCENDING", null, null, null, null)
 			).isInstanceOf(MoplException.class);
 
 			verifyNoInteractions(playlistRepository);
@@ -165,11 +165,11 @@ class PlaylistServiceTest {
 		@DisplayName("cursor와 idAfter 중 하나만 있으면 예외가 발생한다")
 		void cursorIdAfterMismatch_throws() {
 			assertThatThrownBy(() ->
-				playlistService.getPlaylists("2026-01-01T00:00:00", null, 20, "updatedAt", "DESCENDING", null, null)
+				playlistService.getPlaylists("2026-01-01T00:00:00", null, 20, "updatedAt", "DESCENDING", null, null, null, null)
 			).isInstanceOf(MoplException.class);
 
 			assertThatThrownBy(() ->
-				playlistService.getPlaylists(null, UUID.randomUUID(), 20, "updatedAt", "DESCENDING", null, null)
+				playlistService.getPlaylists(null, UUID.randomUUID(), 20, "updatedAt", "DESCENDING", null, null, null, null)
 			).isInstanceOf(MoplException.class);
 		}
 
@@ -177,7 +177,7 @@ class PlaylistServiceTest {
 		@DisplayName("지원하지 않는 sortBy 값이면 예외가 발생한다")
 		void invalidSortBy_throws() {
 			assertThatThrownBy(() ->
-				playlistService.getPlaylists(null, null, 20, "invalidSort", "DESCENDING", null, null)
+				playlistService.getPlaylists(null, null, 20, "invalidSort", "DESCENDING", null, null, null, null)
 			).isInstanceOf(MoplException.class);
 		}
 
@@ -185,14 +185,14 @@ class PlaylistServiceTest {
 		@DisplayName("다음 페이지가 있으면 hasNext=true와 nextCursor를 반환한다")
 		void success_hasNextTrue() {
 			List<Playlist> playlists = List.of(playlist, playlist, playlist);
-			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any()))
+			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any(), any(), any()))
 				.thenReturn(playlists);
-			when(playlistRepository.countAllMatching(any())).thenReturn(10L);
+			when(playlistRepository.countAllMatching(any(), any(), any())).thenReturn(10L);
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
 			PlaylistListResponse response = playlistService.getPlaylists(
-				null, null, 2, "updatedAt", "DESCENDING", null, null
+				null, null, 2, "updatedAt", "DESCENDING", null, null, null, null
 			);
 
 			assertThat(response.hasNext()).isTrue();
@@ -205,14 +205,14 @@ class PlaylistServiceTest {
 		@DisplayName("다음 페이지가 없으면 hasNext=false를 반환한다")
 		void success_hasNextFalse() {
 			List<Playlist> playlists = List.of(playlist);
-			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any()))
+			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any(), any(), any()))
 				.thenReturn(playlists);
-			when(playlistRepository.countAllMatching(any())).thenReturn(1L);
+			when(playlistRepository.countAllMatching(any(), any(), any())).thenReturn(1L);
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
 			PlaylistListResponse response = playlistService.getPlaylists(
-				null, null, 20, "updatedAt", "DESCENDING", null, null
+				null, null, 20, "updatedAt", "DESCENDING", null, null, null, null
 			);
 
 			assertThat(response.hasNext()).isFalse();
@@ -223,15 +223,15 @@ class PlaylistServiceTest {
 		@Test
 		@DisplayName("limit이 최대치를 넘으면 100으로 보정해서 조회한다")
 		void limitExceedsMax_clampedTo100() {
-			when(playlistRepository.findAllByCursor(any(), any(), eq(101), any(), any(), any()))
+			when(playlistRepository.findAllByCursor(any(), any(), eq(101), any(), any(), any(), any(), any()))
 				.thenReturn(List.of());
-			when(playlistRepository.countAllMatching(any())).thenReturn(0L);
+			when(playlistRepository.countAllMatching(any(), any(), any())).thenReturn(0L);
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			playlistService.getPlaylists(null, null, 200, "updatedAt", "DESCENDING", null, null);
+			playlistService.getPlaylists(null, null, 200, "updatedAt", "DESCENDING", null, null, null, null);
 
-			verify(playlistRepository).findAllByCursor(any(), any(), eq(101), any(), any(), any());
+			verify(playlistRepository).findAllByCursor(any(), any(), eq(101), any(), any(), any(), any(), any());
 		}
 
 		@Test
@@ -239,18 +239,56 @@ class PlaylistServiceTest {
 		void success_withSubscriberIdEqual() {
 			UUID subscriberIdEqual = UUID.randomUUID();
 			List<Playlist> playlists = List.of(playlist);
-			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), eq(subscriberIdEqual)))
+			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), eq(subscriberIdEqual), any(), any()))
 				.thenReturn(playlists);
-			when(playlistRepository.countAllMatching(eq(subscriberIdEqual))).thenReturn(1L);
+			when(playlistRepository.countAllMatching(eq(subscriberIdEqual), any(), any())).thenReturn(1L);
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
 			PlaylistListResponse response = playlistService.getPlaylists(
-				null, null, 20, "updatedAt", "DESCENDING", null, subscriberIdEqual
+				null, null, 20, "updatedAt", "DESCENDING", null, subscriberIdEqual, null, null
 			);
 
 			assertThat(response.totalCount()).isEqualTo(1L);
-			verify(playlistRepository).findAllByCursor(any(), any(), anyInt(), any(), any(), eq(subscriberIdEqual));
+			verify(playlistRepository).findAllByCursor(any(), any(), anyInt(), any(), any(), eq(subscriberIdEqual), any(), any());
+		}
+
+		@Test
+		@DisplayName("ownerIdEqual이 주어지면 필터 조건과 함께 조회한다")
+		void success_withOwnerIdEqual() {
+			UUID ownerIdEqual = UUID.randomUUID();
+			List<Playlist> playlists = List.of(playlist);
+			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any(), eq(ownerIdEqual), any()))
+				.thenReturn(playlists);
+			when(playlistRepository.countAllMatching(any(), eq(ownerIdEqual), any())).thenReturn(1L);
+			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
+			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
+
+			PlaylistListResponse response = playlistService.getPlaylists(
+				null, null, 20, "updatedAt", "DESCENDING", null, null, ownerIdEqual, null
+			);
+
+			assertThat(response.totalCount()).isEqualTo(1L);
+			verify(playlistRepository).findAllByCursor(any(), any(), anyInt(), any(), any(), any(), eq(ownerIdEqual), any());
+		}
+
+		@Test
+		@DisplayName("keywordLike가 주어지면 필터 조건과 함께 조회한다")
+		void success_withKeywordLike() {
+			String keywordLike = "비 오는 날";
+			List<Playlist> playlists = List.of(playlist);
+			when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any(), any(), eq(keywordLike)))
+				.thenReturn(playlists);
+			when(playlistRepository.countAllMatching(any(), any(), eq(keywordLike))).thenReturn(1L);
+			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
+			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
+
+			PlaylistListResponse response = playlistService.getPlaylists(
+				null, null, 20, "updatedAt", "DESCENDING", null, null, null, keywordLike
+			);
+
+			assertThat(response.totalCount()).isEqualTo(1L);
+			verify(playlistRepository).findAllByCursor(any(), any(), anyInt(), any(), any(), any(), any(), eq(keywordLike));
 		}
 	}
 

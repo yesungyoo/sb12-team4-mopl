@@ -40,10 +40,12 @@ public class PlaylistController {
 		@RequestParam String sortBy,
 		@RequestParam String sortDirection,
 		@RequestParam(required = false) UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
-		@RequestParam(required = false) UUID subscriberIdEqual
+		@RequestParam(required = false) UUID subscriberIdEqual,
+		@RequestParam(required = false) UUID ownerIdEqual,
+		@RequestParam(required = false) String keywordLike
 	) {
 		PlaylistListResponse response = playlistService.getPlaylists(
-			cursor, idAfter, limit, sortBy, sortDirection, requesterId, subscriberIdEqual
+			cursor, idAfter, limit, sortBy, sortDirection, requesterId, subscriberIdEqual, ownerIdEqual, keywordLike
 		);
 
 		return ResponseEntity.ok(response);

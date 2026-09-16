@@ -99,7 +99,7 @@ class PlaylistControllerTest {
 				List.of(sampleResponse), null, null, false,
 				"updatedAt", "DESCENDING", 1L
 			);
-			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), any()))
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), any(), any(), any()))
 				.thenReturn(response);
 
 			mockMvc.perform(get("/playlists")
@@ -130,7 +130,7 @@ class PlaylistControllerTest {
 				List.of(sampleResponse), null, null, false,
 				"updatedAt", "DESCENDING", 1L
 			);
-			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), eq(subscriberIdEqual)))
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), eq(subscriberIdEqual), any(), any()))
 				.thenReturn(response);
 
 			mockMvc.perform(get("/playlists")
@@ -138,6 +138,46 @@ class PlaylistControllerTest {
 					.param("sortBy", "updatedAt")
 					.param("sortDirection", "DESCENDING")
 					.param("subscriberIdEqual", subscriberIdEqual.toString()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalCount").value(1));
+		}
+
+		@Test
+		@DisplayName("ownerIdEqual 파라미터를 서비스에 전달한다")
+		void success_withOwnerIdEqual() throws Exception {
+			UUID ownerIdEqual = UUID.randomUUID();
+			PlaylistListResponse response = new PlaylistListResponse(
+				List.of(sampleResponse), null, null, false,
+				"updatedAt", "DESCENDING", 1L
+			);
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), any(), eq(ownerIdEqual), any()))
+				.thenReturn(response);
+
+			mockMvc.perform(get("/playlists")
+					.param("limit", "20")
+					.param("sortBy", "updatedAt")
+					.param("sortDirection", "DESCENDING")
+					.param("ownerIdEqual", ownerIdEqual.toString()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalCount").value(1));
+		}
+
+		@Test
+		@DisplayName("keywordLike 파라미터를 서비스에 전달한다")
+		void success_withKeywordLike() throws Exception {
+			String keywordLike = "비 오는 날";
+			PlaylistListResponse response = new PlaylistListResponse(
+				List.of(sampleResponse), null, null, false,
+				"updatedAt", "DESCENDING", 1L
+			);
+			when(playlistService.getPlaylists(any(), any(), eq(20), eq("updatedAt"), eq("DESCENDING"), any(), any(), any(), eq(keywordLike)))
+				.thenReturn(response);
+
+			mockMvc.perform(get("/playlists")
+					.param("limit", "20")
+					.param("sortBy", "updatedAt")
+					.param("sortDirection", "DESCENDING")
+					.param("keywordLike", keywordLike))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.totalCount").value(1));
 		}

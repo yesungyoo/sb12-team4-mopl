@@ -52,6 +52,26 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 			.exists();
 	}
 
+	// 검색/필터 공통 조건 조립 (subscriberIdEqual, ownerIdEqual, keywordLike)
+	private BooleanBuilder buildSearchCondition(UUID subscriberIdEqual, UUID ownerIdEqual, String keywordLike) {
+		BooleanBuilder builder = new BooleanBuilder();
+
+		if (subscriberIdEqual != null) {
+			builder.and(subscriberEqualCondition(subscriberIdEqual));
+		}
+		if (ownerIdEqual != null) {
+			builder.and(playlist.owner.id.eq(ownerIdEqual));
+		}
+		if (keywordLike != null && !keywordLike.isBlank()) {
+			builder.and(
+				playlist.title.containsIgnoreCase(keywordLike)
+					.or(playlist.description.containsIgnoreCase(keywordLike))
+			);
+		}
+
+		return builder;
+	}
+
 	@Override
 	public List<Playlist> findAllByCursor(
 		String cursor,
@@ -59,17 +79,16 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 		int limitPlusOne,
 		PlaylistSortBy sortBy,
 		SortDirection sortDirection,
-		UUID subscriberIdEqual
+		UUID subscriberIdEqual,
+		UUID ownerIdEqual,
+		String keywordLike
 	) {
 		boolean isDesc = sortDirection == SortDirection.DESCENDING;
 
-		BooleanBuilder condition = new BooleanBuilder();
+		BooleanBuilder condition = buildSearchCondition(subscriberIdEqual, ownerIdEqual, keywordLike);
 
 		if (cursor != null && idAfter != null) {
 			condition.and(buildCursorCondition(sortBy, isDesc, cursor, idAfter));
-		}
-		if (subscriberIdEqual != null) {
-			condition.and(subscriberEqualCondition(subscriberIdEqual));
 		}
 
 		return queryFactory
@@ -82,11 +101,8 @@ public class PlaylistRepositoryImpl implements PlaylistRepositoryCustom {
 	}
 
 	@Override
-	public long countAllMatching(UUID subscriberIdEqual) {
-		BooleanBuilder condition = new BooleanBuilder();
-		if (subscriberIdEqual != null) {
-			condition.and(subscriberEqualCondition(subscriberIdEqual));
-		}
+	public long countAllMatching(UUID subscriberIdEqual, UUID ownerIdEqual, String keywordLike) {
+		BooleanBuilder condition = buildSearchCondition(subscriberIdEqual, ownerIdEqual, keywordLike);
 
 		Long count = queryFactory
 			.select(playlist.count())
