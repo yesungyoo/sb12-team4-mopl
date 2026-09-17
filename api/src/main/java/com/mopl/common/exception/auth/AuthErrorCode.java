@@ -9,14 +9,11 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum AuthErrorCode implements ErrorCode {
 
-    // 예시
-    // CONTENT_NOT_FOUND(
-    //         HttpStatus.NOT_FOUND,
-    //         "AUTH_001",
-    //         "콘텐츠를 찾을 수 없습니다."
-    // );
-
-    ;
+    INVALID_CREDENTIALS(
+            HttpStatus.UNAUTHORIZED,
+            "AUTH_001",
+            "이메일 또는 비밀번호가 올바르지 않습니다."
+    );
 
     private final HttpStatus status;
     private final String code;

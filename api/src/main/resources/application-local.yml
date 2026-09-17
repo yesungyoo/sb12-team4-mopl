@@ -23,3 +23,8 @@ management:
   endpoint:
     health:
       show-details: always
+
+jwt:
+  secret: local-dev-secret-key-please-change-this-in-real-env-1234567890
+  access-token-expiration-seconds: 1800
+  refresh-token-expiration-seconds: 1209600
