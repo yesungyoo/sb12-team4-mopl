@@ -1,5 +1,6 @@
 package com.mopl.notification.controller;
 
+import com.mopl.auth.util.SecurityUtil;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.notification.dto.NotificationResponse;
 import com.mopl.notification.service.NotificationService;
@@ -24,20 +25,21 @@ public class NotificationController {
 
   @GetMapping
   public ResponseEntity<CursorResponse<NotificationResponse>> getNotifications(
-      @RequestParam UUID userId,
       @RequestParam(required = false) LocalDateTime cursor,
       @RequestParam(required = false) UUID idAfter,
       @RequestParam(defaultValue = "20") int limit,
       @RequestParam(defaultValue = "createdAt") String sortBy,
       @RequestParam(defaultValue = "DESCENDING") String sortDirection
   ) {
+    UUID userId = SecurityUtil.getCurrentUserId();
     CursorResponse<NotificationResponse> notifications =
         notificationService.getNotifications(userId, cursor, idAfter, limit, sortBy, sortDirection);
     return ResponseEntity.ok(notifications);
   }
 
   @DeleteMapping("/{notificationId}")
-  public ResponseEntity<Void> deleteNotification(@RequestParam UUID userId, @PathVariable UUID notificationId) {
+  public ResponseEntity<Void> deleteNotification(@PathVariable UUID notificationId) {
+    UUID userId = SecurityUtil.getCurrentUserId();
     notificationService.readNotification(userId, notificationId);
     return ResponseEntity.noContent().build();
   }

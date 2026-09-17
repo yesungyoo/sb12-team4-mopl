@@ -1,5 +1,6 @@
 package com.mopl.notification.controller;
 
+import com.mopl.auth.util.SecurityUtil;
 import com.mopl.core.common.enums.NotificationType;
 import com.mopl.notification.dto.NotificationPreferenceResponse;
 import com.mopl.notification.dto.NotificationPreferenceUpdateRequest;
@@ -21,17 +22,17 @@ public class NotificationPreferenceController {
 
   @GetMapping
   public ResponseEntity<List<NotificationPreferenceResponse>> getPreferences(
-      @RequestParam UUID userId
   ) {
+    UUID userId = SecurityUtil.getCurrentUserId();
     return ResponseEntity.ok(preferenceService.getPreferences(userId));
   }
 
   @PatchMapping("/{type}")
   public ResponseEntity<Void> updatePreference(
-      @RequestParam UUID userId,
       @PathVariable NotificationType type,
       @Valid @RequestBody NotificationPreferenceUpdateRequest request
   ) {
+    UUID userId = SecurityUtil.getCurrentUserId();
     preferenceService.updatePreference(userId, type, request.enabled());
     return ResponseEntity.noContent().build();
   }

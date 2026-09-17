@@ -2,11 +2,14 @@ package com.mopl.notification.service;
 
 import com.mopl.common.exception.notification.NotificationNotFoundException;
 import com.mopl.core.common.dto.CursorResponse;
+import static org.mockito.ArgumentMatchers.eq;
 import com.mopl.core.common.enums.NotificationLevel;
 import com.mopl.core.common.enums.NotificationType;
+import com.mopl.core.common.event.NotificationCreatedEvent;
 import com.mopl.core.domain.notification.entity.Notification;
 import com.mopl.core.domain.notification.entity.NotificationPreference;
 import com.mopl.core.domain.user.entity.User;
+import com.mopl.notification.sse.SseEmitterManager;
 import com.mopl.user.repository.UserRepository;
 import com.mopl.notification.dto.NotificationResponse;
 import com.mopl.notification.repository.NotificationPreferenceRepository;
@@ -23,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,6 +48,9 @@ class NotificationServiceTest {
 
   @Mock
   private NotificationPreferenceRepository preferenceRepository;
+
+  @Mock
+  private ApplicationEventPublisher eventPublisher;
 
   @InjectMocks
   private NotificationService notificationService;
@@ -232,12 +239,16 @@ class NotificationServiceTest {
   class CreateNotification {
 
     @Test
-    @DisplayName("성공 - 알림 설정이 켜져 있으면 알림이 생성되어 저장된다")
+    @DisplayName("성공 - 알림 설정이 켜져 있으면 알림이 생성되고 이벤트가 발행된다")
     void 알림_생성_성공() {
       // given
       User receiver = mock(User.class);
       given(preferenceRepository.findByUserAndType(receiver, NotificationType.FOLLOW))
           .willReturn(Optional.empty());
+
+      Notification savedNotification = mock(Notification.class);
+      given(savedNotification.getId()).willReturn(UUID.randomUUID());
+      given(notificationRepository.save(any())).willReturn(savedNotification);
 
       // when
       notificationService.createNotification(
@@ -246,6 +257,7 @@ class NotificationServiceTest {
 
       // then
       then(notificationRepository).should().save(any());
+      then(eventPublisher).should().publishEvent(any(NotificationCreatedEvent.class));
     }
 
     @Test

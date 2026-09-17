@@ -2,8 +2,10 @@ package com.mopl.notification.service;
 
 import com.mopl.common.exception.notification.NotificationNotFoundException;
 import com.mopl.core.common.enums.NotificationType;
+import com.mopl.core.common.event.NotificationCreatedEvent;
 import com.mopl.core.domain.notification.entity.NotificationPreference;
 import com.mopl.notification.repository.NotificationPreferenceRepository;
+import com.mopl.notification.sse.SseEmitterManager;
 import com.mopl.user.repository.UserRepository;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.enums.NotificationLevel;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +31,7 @@ public class NotificationService {
   private final NotificationRepository notificationRepository;
   private final UserRepository userRepository;
   private final NotificationPreferenceRepository preferenceRepository;
+  private final ApplicationEventPublisher eventPublisher;
 
   public CursorResponse<NotificationResponse> getNotifications(
       UUID userId, LocalDateTime cursor, UUID idAfter, int limit, String sortBy, String sortDirection
@@ -80,6 +84,8 @@ public class NotificationService {
     }
 
     Notification notification = new Notification(receiver, title, content, level);
-    notificationRepository.save(notification);
+    Notification saved = notificationRepository.save(notification);
+
+    eventPublisher.publishEvent(new NotificationCreatedEvent(saved.getId()));
   }
 }
