@@ -24,6 +24,15 @@ management:
     health:
       show-details: always
 
+ai:
+  openai:
+    base-url: https://api.openai.com/v1
+    api-key: ${OPENAI_API_KEY:}
+    llm-model: gpt-5.6-luna
+    embedding-model: text-embedding-3-small
+    connect-timeout: 5s
+    read-timeout: 30s
+
 jwt:
   secret: local-dev-secret-key-please-change-this-in-real-env-1234567890
   access-token-expiration-seconds: 1800

@@ -20,4 +20,9 @@ dependencies {
 
     // Kafka
     api 'org.springframework.kafka:spring-kafka'
+
+    // AI
+    api 'org.springframework.boot:spring-boot-starter-web'
+
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
