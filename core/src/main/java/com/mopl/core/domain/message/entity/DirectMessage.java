@@ -48,6 +48,12 @@ public class DirectMessage extends BaseEntity {
         this.content = content;
     }
 
+	public void markAsRead() {
+		if (this.readAt == null) {
+			this.readAt = LocalDateTime.now();
+		}
+	}
+
     public UUID getId() {
         return id;
     }
