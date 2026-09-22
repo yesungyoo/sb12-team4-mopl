@@ -33,6 +33,11 @@ ai:
     connect-timeout: 5s
     read-timeout: 30s
 
+# 로컬 환경에서 필요할 때만 MySQL의 Content 전체를 Elasticsearch에 재색인
+mopl:
+  elasticsearch:
+    reindex-on-startup: ${MOPL_ELASTICSEARCH_REINDEX_ON_STARTUP:false}
+
 jwt:
   secret: local-dev-secret-key-please-change-this-in-real-env-1234567890
   access-token-expiration-seconds: 1800

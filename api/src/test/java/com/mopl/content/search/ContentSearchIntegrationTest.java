@@ -1,18 +1,25 @@
 package com.mopl.content.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.List;
 
+import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
+import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MySQLContainer;
@@ -37,6 +44,8 @@ import com.mopl.core.domain.content.entity.Content;
 })
 @Testcontainers
 public class ContentSearchIntegrationTest {
+
+    private static final int EMBEDDING_DIMENSIONS = 1536;
 
     @Container
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
@@ -63,6 +72,9 @@ public class ContentSearchIntegrationTest {
     @Autowired
     private ContentSearchService contentSearchService;
 
+    @MockitoBean
+    private EmbeddingClient embeddingClient;
+
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
@@ -75,6 +87,9 @@ public class ContentSearchIntegrationTest {
     void setUp() {
         contentSearchRepository.deleteAll();
         contentRepository.deleteAllInBatch();
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(Collections.nCopies(EMBEDDING_DIMENSIONS, 0.01D)));
     }
 
     @Test

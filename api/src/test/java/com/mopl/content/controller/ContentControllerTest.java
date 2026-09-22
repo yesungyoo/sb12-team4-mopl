@@ -3,6 +3,7 @@ package com.mopl.content.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.content.dto.*;
+import com.mopl.content.search.service.SemanticSearchService;
 import com.mopl.content.service.ContentService;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
@@ -12,6 +13,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,7 +39,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 @WebMvcTest(ContentController.class)
 
 @AutoConfigureMockMvc(addFilters = false)
-class ContentControllerTest {
+public class ContentControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -47,6 +49,9 @@ class ContentControllerTest {
 
     @MockitoBean
     private ContentService contentService;
+
+    @MockitoBean
+    private SemanticSearchService semanticSearchService;
 
     @Test
     @DisplayName("콘텐츠 단건 조회에 성공하면 200을 반환한다")
@@ -112,6 +117,54 @@ class ContentControllerTest {
                 .andExpect(jsonPath("$.page").value(0))
                 .andExpect(jsonPath("$.size").value(20))
                 .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @Test
+    @DisplayName("시맨틱 검색에 성공하면 유사 콘텐츠 목록과 200을 반환한다")
+    void searchSemanticContentSuccess() throws Exception {
+        ContentResponse firstContent = createResponse(UUID.randomUUID(), "Space Journey");
+        ContentResponse secondContent = createResponse(UUID.randomUUID(), "Interstellar");
+
+        ContentListResponse response = new ContentListResponse(
+                List.of(firstContent, secondContent),
+                0,
+                20,
+                2,
+                1
+        );
+
+        when(semanticSearchService.search(
+                eq("감동적인 우주 탐험 영화"),
+                any(Pageable.class)
+        )).thenReturn(response);
+
+        mockMvc.perform(get("/contents/semantic-search")
+                .param("query", "감동적인 우주 탐험 영화"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contents.length()").value(2))
+                .andExpect(jsonPath("$.contents[0].title").value("Space Journey"))
+                .andExpect(jsonPath("$.contents[1].title").value("Interstellar"))
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.totalPages").value(1));
+    }
+
+    @Test
+    @Disabled("공통 핸들러의 메서드 파라미터 검증 400 처리 후 활성화 (GlobalExceptionHandler 후속 이슈)")
+    @DisplayName("시맨틱 검색어가 누락되면 400을 반환한다")
+    void searchSemanticContentMissingQuery() throws Exception {
+        mockMvc.perform(get("/contents/semantic-search"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @Disabled("공통 핸들러의 메서드 파라미터 검증 400 처리 후 활성화 (GlobalExceptionHandler 후속 이슈)")
+    @DisplayName("시맨틱 검색어가 공백이면 400을 반환한다")
+    void searchSemanticContentsBlankQuery() throws Exception {
+        mockMvc.perform(get("/contents/semantic-search")
+                .param("query", " "))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

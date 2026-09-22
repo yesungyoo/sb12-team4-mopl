@@ -22,6 +22,7 @@ public class ContentSearchIndexer {
 
     private final ContentRepository contentRepository;
     private final ContentSearchRepository contentSearchRepository;
+    private final ContentEmbeddingService contentEmbeddingService;
 
     public long reindexAll() {
         // TODO 운영 환경 재색인 시 신규 인덱스 생성 후 alias swap 방식으로 전환
@@ -41,7 +42,7 @@ public class ContentSearchIndexer {
             contentPage = contentRepository.findAllByDeletedAtIsNull(pageable);
 
             List<ContentSearchDocument> documents = contentPage.getContent().stream()
-                    .map(ContentSearchDocument::from)
+                    .map(this::createDocument)
                     .toList();
 
             if (!documents.isEmpty()) {
@@ -56,13 +57,19 @@ public class ContentSearchIndexer {
     }
 
     public void index(Content content) {
-        ContentSearchDocument document = ContentSearchDocument.from(content);
+        ContentSearchDocument document = createDocument(content);
 
         contentSearchRepository.save(document);
     }
 
     public void delete(UUID contentId) {
         contentSearchRepository.deleteById(contentId.toString());
+    }
+
+    private ContentSearchDocument createDocument(Content content) {
+        List<Double> embedding = contentEmbeddingService.embedContent(content);
+
+        return ContentSearchDocument.from(content, embedding);
     }
 
 }

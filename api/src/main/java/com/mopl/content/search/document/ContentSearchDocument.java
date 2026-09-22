@@ -6,21 +6,19 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
-import org.springframework.data.elasticsearch.annotations.DateFormat;
-import org.springframework.data.elasticsearch.annotations.Document;
-import org.springframework.data.elasticsearch.annotations.Field;
-import org.springframework.data.elasticsearch.annotations.FieldType;
-import org.springframework.data.elasticsearch.annotations.InnerField;
-import org.springframework.data.elasticsearch.annotations.MultiField;
+import org.springframework.data.elasticsearch.annotations.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Document(indexName = "contents")
 public class ContentSearchDocument {
+
+    private static final int EMBEDDING_DIMENSIONS = 1536;
 
     @Id
     @Field(type = FieldType.Keyword)
@@ -68,7 +66,20 @@ public class ContentSearchDocument {
     )
     private LocalDateTime createdAt;
 
-    public static ContentSearchDocument from(Content content) {
+    @Field(
+            type = FieldType.Dense_Vector,
+            dims = EMBEDDING_DIMENSIONS,
+            index = true,
+            elementType = "float",
+            knnSimilarity = KnnSimilarity.COSINE
+    )
+    private List<Float> embedding;
+
+    public static ContentSearchDocument from(Content content, List<Double> embedding) {
+        List<Float> floatEmbedding = embedding.stream()
+                .map(Double::floatValue)
+                .toList();
+
         return new ContentSearchDocument(
                 content.getId().toString(),
                 content.getType().name(),
@@ -81,7 +92,8 @@ public class ContentSearchDocument {
                 content.getExternalPopularity() == null ? null : content.getExternalPopularity().doubleValue(),
                 content.getExternalRating() == null ? null : content.getExternalRating().doubleValue(),
                 content.getExternalVoteCount(),
-                content.getCreatedAt()
+                content.getCreatedAt(),
+                floatEmbedding
         );
     }
 }
