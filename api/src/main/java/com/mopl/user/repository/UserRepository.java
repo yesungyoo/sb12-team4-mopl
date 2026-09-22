@@ -41,4 +41,12 @@ public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificat
     @Modifying(clearAutomatically = true)
     @Query("update User u set u.name = :name, u.profileImageUrl = COALESCE(:profileImageUrl, u.profileImageUrl) where u.id = :id")
     void updateProfile(@Param("id") UUID id, @Param("name") String name, @Param("profileImageUrl") String profileImageUrl);
+
+    @Modifying(clearAutomatically = true)
+    @Query("update User u set u.tempPassword = :tempPassword, u.tempPasswordExpiredAt = :expiredAt where u.id = :id")
+    void updateTempPassword(
+            @Param("id") UUID id,
+            @Param("tempPassword") String tempPassword,
+            @Param("expiredAt") LocalDateTime expiredAt
+    );
 }

@@ -18,6 +18,7 @@ import com.mopl.auth.handler.LogoutSuccessHandlerImpl;
 import com.mopl.auth.jwt.AuthCookieWriter;
 import com.mopl.auth.jwt.AuthCookies;
 import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.auth.mail.LoggingTempPasswordMailSender;
 import com.mopl.auth.provider.EmailPasswordAuthenticationProvider;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.auth.service.AuthService;
@@ -54,6 +55,7 @@ import org.springframework.test.web.servlet.MockMvc;
         JwtTokenProvider.class,
         AuthCookieWriter.class,
         AuthService.class,
+        LoggingTempPasswordMailSender.class,
         LoginSuccessHandler.class,
         LoginFailureHandler.class,
         LogoutSuccessHandlerImpl.class

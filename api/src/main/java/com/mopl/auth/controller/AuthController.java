@@ -1,17 +1,22 @@
 package com.mopl.auth.controller;
 
 import com.mopl.auth.dto.AuthResponse;
+import com.mopl.auth.dto.ResetPasswordRequest;
 import com.mopl.auth.jwt.AuthCookieWriter;
 import com.mopl.auth.jwt.AuthCookies;
 import com.mopl.auth.service.AuthService;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -20,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Spring Security 의 formLogin/logout 내장 필터가 처리한다.
  * (SecurityConfig, EmailPasswordAuthenticationProvider, LoginSuccessHandler/LoginFailureHandler,
  *  LogoutSuccessHandlerImpl 참고)
- * 이 컨트롤러에는 필터로 처리할 수 없는 두 가지만 남는다: 토큰 재발급, CSRF 토큰 발급.
+ * 이 컨트롤러에는 필터로 처리할 수 없는 것들만 남는다: 토큰 재발급, CSRF 토큰 발급, 임시비밀번호 발급.
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -50,5 +55,16 @@ public class AuthController {
     public ResponseEntity<Void> csrfToken(CsrfToken csrfToken) {
         csrfToken.getToken();
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 임시 비밀번호로 초기화 후 이메일로 전송한다.
+     * TODO: 메일 발송 인프라(SMTP) 미연동 상태라, 실제로는 로그로만 남는다
+     * (LoggingTempPasswordMailSender 참고). 인프라 연동 시 구현체만 교체하면 됨.
+     */
+    @PostMapping("/reset-password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        authService.resetPassword(request.email());
     }
 }

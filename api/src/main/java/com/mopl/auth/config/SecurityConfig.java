@@ -25,6 +25,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.logout.LogoutFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 
 @Configuration
 @EnableWebSecurity
@@ -51,11 +52,18 @@ public class SecurityConfig {
         http
                 // JWT 를 쿠키로 주고받으므로 CSRF 방어가 필요함.
                 // 쿠키 이름 XSRF-TOKEN / 헤더 이름 X-XSRF-TOKEN 은 CookieCsrfTokenRepository 기본값과 정확히 일치.
-                .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                        // 기본 핸들러(XorCsrfTokenRequestAttributeHandler)는 매 요청마다 토큰을 XOR 인코딩해서
+                        // BREACH 공격을 방어하는데, 이 방식은 "쿠키의 원본 값을 그대로 헤더에 실어 보내는"
+                        // 쿠키 기반 CSRF 흐름(SPA, curl 등)과 맞지 않아 정상 요청도 403으로 막힌다.
+                        // 쿠키 원본 값을 그대로 비교하는 CsrfTokenRequestAttributeHandler 로 명시해야 함.
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(emailPasswordAuthenticationProvider)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/sign-in", "/api/auth/refresh", "/api/auth/csrf-token").permitAll()
+                        .requestMatchers("/api/auth/sign-in", "/api/auth/refresh", "/api/auth/csrf-token", "/api/auth/reset-password").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users").permitAll() // 회원가입
                         .anyRequest().authenticated()
                 )
