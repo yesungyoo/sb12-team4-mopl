@@ -69,4 +69,18 @@ public class Review extends BaseUpdatableEntity {
     public String getText() {
         return text;
     }
+
+    public void update(BigDecimal rating, String text) {
+        if (rating != null) {
+            this.rating = rating;
+        }
+
+        if (text != null) {
+            this.text = text;
+        }
+    }
+
+    public boolean isWrittenBy(UUID userId) {
+        return user.getId().equals(userId);
+    }
 }
