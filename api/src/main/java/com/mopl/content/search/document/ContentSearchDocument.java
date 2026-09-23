@@ -1,6 +1,7 @@
 package com.mopl.content.search.document;
 
 import com.mopl.core.domain.content.entity.Content;
+import com.mopl.core.domain.content.entity.ContentTag;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -59,6 +60,9 @@ public class ContentSearchDocument {
     @Field(type = FieldType.Long)
     private Long externalVoteCount;
 
+    @Field(type = FieldType.Nested)
+    private List<ContentTagSearchDocument> tags;
+
     @Field(
             type = FieldType.Date,
             format = {},
@@ -75,7 +79,11 @@ public class ContentSearchDocument {
     )
     private List<Float> embedding;
 
-    public static ContentSearchDocument from(Content content, List<Double> embedding) {
+    public static ContentSearchDocument from(Content content, List<ContentTag> contentTags, List<Double> embedding) {
+        List<ContentTagSearchDocument> tags = contentTags.stream()
+                .map(ContentTagSearchDocument::from)
+                .toList();
+
         List<Float> floatEmbedding = embedding.stream()
                 .map(Double::floatValue)
                 .toList();
@@ -92,6 +100,7 @@ public class ContentSearchDocument {
                 content.getExternalPopularity() == null ? null : content.getExternalPopularity().doubleValue(),
                 content.getExternalRating() == null ? null : content.getExternalRating().doubleValue(),
                 content.getExternalVoteCount(),
+                tags,
                 content.getCreatedAt(),
                 floatEmbedding
         );
