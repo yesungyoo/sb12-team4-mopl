@@ -36,15 +36,15 @@ public class PlaylistSubscriptionService {
 	}
 
 	@Transactional
-	public void subscribe(UUID requesterId, UUID playlistId) {
+	public void subscribe(UUID currentUserId, UUID playlistId) {
 		Playlist playlist = playlistRepository.findById(playlistId)
 			.orElseThrow(PlaylistNotFoundException::new);
 
-		if (playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, requesterId)) {
+		if (playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, currentUserId)) {
 			throw new PlaylistSubscriptionAlreadyExistsException();
 		}
 
-		User subscriber = entityManager.find(User.class, requesterId);
+		User subscriber = entityManager.find(User.class, currentUserId);
 		if (subscriber == null) {
 			// TODO: User 도메인 예외 체계(UserErrorCode.USER_NOT_FOUND 등) 생기면 교체 예정
 			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
@@ -58,9 +58,9 @@ public class PlaylistSubscriptionService {
 	}
 
 	@Transactional
-	public void unsubscribe(UUID requesterId, UUID playlistId) {
+	public void unsubscribe(UUID currentUserId, UUID playlistId) {
 		PlaylistSubscription subscription = playlistSubscriptionRepository
-			.findByPlaylistIdAndSubscriberId(playlistId, requesterId)
+			.findByPlaylistIdAndSubscriberId(playlistId, currentUserId)
 			.orElseThrow(PlaylistSubscriptionNotFoundException::new);
 
 		playlistSubscriptionRepository.delete(subscription);

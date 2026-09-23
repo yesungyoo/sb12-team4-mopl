@@ -4,10 +4,10 @@ import com.mopl.common.exception.MoplException;
 import com.mopl.common.exception.playlist.PlaylistAccessDeniedException;
 import com.mopl.common.exception.playlist.PlaylistNotFoundException;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.domain.playlist.entity.Playlist;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.playlist.dto.PlaylistCreateRequest;
-import com.mopl.playlist.dto.PlaylistListResponse;
 import com.mopl.playlist.dto.PlaylistResponse;
 import com.mopl.playlist.dto.PlaylistUpdateRequest;
 import com.mopl.playlist.repository.PlaylistContentRepository;
@@ -103,7 +103,7 @@ class PlaylistServiceTest {
 			assertThat(response.id()).isEqualTo(playlistId);
 			assertThat(response.ownerId()).isEqualTo(ownerId);
 			assertThat(response.title()).isEqualTo("기존 제목");
-			// 구독/콘텐츠 연결 기능이 아직 없어 스텁값이어야 한다
+			// 연결된 구독과 콘텐츠가 없으면 기본값을 반환한다
 			assertThat(response.subscriberCount()).isZero();
 			assertThat(response.subscribedByMe()).isFalse();
 			assertThat(response.contents()).isEmpty();
@@ -191,13 +191,13 @@ class PlaylistServiceTest {
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			PlaylistListResponse response = playlistService.getPlaylists(
+			CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
 				null, null, 2, "updatedAt", "DESCENDING", null, null, null, null
 			);
 
 			assertThat(response.hasNext()).isTrue();
 			assertThat(response.data()).hasSize(2);
-			assertThat(response.nextIdAfter()).isEqualTo(playlistId);
+			assertThat(response.nextIdAfter()).isEqualTo(playlistId.toString());
 			assertThat(response.totalCount()).isEqualTo(10L);
 		}
 
@@ -211,7 +211,7 @@ class PlaylistServiceTest {
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			PlaylistListResponse response = playlistService.getPlaylists(
+			CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
 				null, null, 20, "updatedAt", "DESCENDING", null, null, null, null
 			);
 
@@ -245,7 +245,7 @@ class PlaylistServiceTest {
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			PlaylistListResponse response = playlistService.getPlaylists(
+			CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
 				null, null, 20, "updatedAt", "DESCENDING", null, subscriberIdEqual, null, null
 			);
 
@@ -264,7 +264,7 @@ class PlaylistServiceTest {
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			PlaylistListResponse response = playlistService.getPlaylists(
+			CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
 				null, null, 20, "updatedAt", "DESCENDING", null, null, ownerIdEqual, null
 			);
 
@@ -283,7 +283,7 @@ class PlaylistServiceTest {
 			when(playlistContentRepository.findAllByPlaylistIdIn(any())).thenReturn(List.of());
 			when(playlistSubscriptionRepository.countByPlaylistIdIn(any())).thenReturn(Map.of());
 
-			PlaylistListResponse response = playlistService.getPlaylists(
+			CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
 				null, null, 20, "updatedAt", "DESCENDING", null, null, null, keywordLike
 			);
 
@@ -297,20 +297,20 @@ class PlaylistServiceTest {
 	class CreatePlaylist {
 
 		@Test
-		@DisplayName("존재하지 않는 요청자로 생성하면 예외가 발생한다")
+		@DisplayName("존재하지 않는 사용자가 플레이리스트를 생성하면 예외가 발생한다")
 		void ownerNotFound_throws() {
-			UUID requesterId = UUID.randomUUID();
+			UUID currentUserId = UUID.randomUUID();
 			PlaylistCreateRequest request = new PlaylistCreateRequest("제목", "설명");
-			when(entityManager.find(User.class, requesterId)).thenReturn(null);
+			when(entityManager.find(User.class, currentUserId)).thenReturn(null);
 
-			assertThatThrownBy(() -> playlistService.createPlaylist(requesterId, request))
+			assertThatThrownBy(() -> playlistService.createPlaylist(currentUserId, request))
 				.isInstanceOf(MoplException.class);
 
 			verify(playlistRepository, never()).save(any());
 		}
 
 		@Test
-		@DisplayName("정상 요청이면 요청자를 owner로 하는 플레이리스트를 저장한다")
+		@DisplayName("정상 요청이면 현재 사용자를 owner로 하는 플레이리스트를 저장한다")
 		void success() {
 			PlaylistCreateRequest request = new PlaylistCreateRequest("제목", "설명");
 			when(entityManager.find(User.class, ownerId)).thenReturn(owner);

@@ -87,7 +87,7 @@ class PlaylistSubscriptionServiceTest {
 		}
 
 		@Test
-		@DisplayName("존재하지 않는 요청자로 구독하면 예외가 발생한다")
+		@DisplayName("존재하지 않는 구독자로 구독하면 예외가 발생한다")
 		void subscriberNotFound_throws() {
 			when(playlistRepository.findById(playlistId)).thenReturn(Optional.of(playlist));
 			when(playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, subscriberId))

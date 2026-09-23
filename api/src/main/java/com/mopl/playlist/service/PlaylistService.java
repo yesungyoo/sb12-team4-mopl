@@ -13,6 +13,7 @@ import com.mopl.core.domain.playlist.entity.Playlist;
 import com.mopl.core.domain.playlist.entity.PlaylistContent;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.playlist.dto.*;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.playlist.repository.PlaylistContentRepository;
 import com.mopl.playlist.repository.PlaylistRepository;
 import com.mopl.playlist.repository.PlaylistSubscriptionRepository;
@@ -60,19 +61,35 @@ public class PlaylistService {
 		this.playlistSubscriptionRepository = playlistSubscriptionRepository;
 	}
 
-	public PlaylistResponse getPlaylist(UUID playlistId, UUID requesterId) {
+	public PlaylistResponse getPlaylist(UUID playlistId, UUID currentUserId) {
 		Playlist playlist = findPlaylistOrThrow(playlistId);
 		List<Content> contents = getContentsOf(playlistId);
 		long subscriberCount = playlistSubscriptionRepository.countByPlaylistId(playlistId);
-		boolean subscribedByMe = requesterId != null
-			&& playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, requesterId);
 
-		return PlaylistResponse.from(playlist, contents, subscriberCount, subscribedByMe);
+		boolean subscribedByMe = currentUserId != null
+			&& playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(
+			playlistId,
+			currentUserId
+		);
+
+		return PlaylistResponse.from(
+			playlist,
+			contents,
+			subscriberCount,
+			subscribedByMe
+		);
 	}
 
-	public PlaylistListResponse getPlaylists(
-		String cursor, UUID idAfter, int limit, String sortByParam, String sortDirectionParam,
-		UUID requesterId, UUID subscriberIdEqual, UUID ownerIdEqual, String keywordLike
+	public CursorResponse<PlaylistResponse> getPlaylists(
+		String cursor,
+		UUID idAfter,
+		int limit,
+		String sortByParam,
+		String sortDirectionParam,
+		UUID currentUserId,
+		UUID subscriberIdEqual,
+		UUID ownerIdEqual,
+		String keywordLike
 	) {
 		if (limit <= 0) {
 			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
@@ -102,17 +119,33 @@ public class PlaylistService {
 				: String.valueOf(playlistSubscriptionRepository.countByPlaylistId(last.getId()));
 		}
 
-		List<PlaylistResponse> data = mapToResponsesWithContents(pageContent, requesterId);
-		long totalCount = playlistRepository.countAllMatching(subscriberIdEqual, ownerIdEqual, keywordLike);
+		List<PlaylistResponse> data =
+			mapToResponsesWithContents(pageContent, currentUserId);
 
-		return new PlaylistListResponse(
-			data, nextCursor, nextIdAfter, hasNext, sortByParam, sortDirectionParam, totalCount
+		long totalCount =
+			playlistRepository.countAllMatching(
+				subscriberIdEqual,
+				ownerIdEqual,
+				keywordLike
+			);
+
+		return CursorResponse.of(
+			data,
+			nextCursor,
+			nextIdAfter != null ? nextIdAfter.toString() : null,
+			hasNext,
+			totalCount,
+			sortByParam,
+			sortDirectionParam
 		);
 	}
 
 	@Transactional
-	public PlaylistResponse createPlaylist(UUID requesterId, PlaylistCreateRequest request) {
-		User owner = entityManager.find(User.class, requesterId);
+	public PlaylistResponse createPlaylist(
+		UUID currentUserId,
+		PlaylistCreateRequest request
+	) {
+		User owner = entityManager.find(User.class, currentUserId);
 		if (owner == null) {
 			// TODO: User 도메인 예외 체계(UserErrorCode.USER_NOT_FOUND 등) 생기면 교체 예정
 			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
@@ -125,7 +158,11 @@ public class PlaylistService {
 	}
 
 	@Transactional
-	public PlaylistResponse updatePlaylist(UUID requesterId, UUID playlistId, PlaylistUpdateRequest request) {
+	public PlaylistResponse updatePlaylist(
+		UUID currentUserId,
+		UUID playlistId,
+		PlaylistUpdateRequest request
+	) {
 		if (request.title() != null && request.title().isBlank()) {
 			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
 		}
@@ -134,29 +171,36 @@ public class PlaylistService {
 		}
 
 		Playlist playlist = findPlaylistOrThrow(playlistId);
-		validateOwner(playlist, requesterId);
+		validateOwner(playlist, currentUserId);
 
 		playlist.update(request.title(), request.description());
 		entityManager.flush();
 
 		long subscriberCount = playlistSubscriptionRepository.countByPlaylistId(playlistId);
 		boolean subscribedByMe = playlistSubscriptionRepository
-			.existsByPlaylistIdAndSubscriberId(playlistId, requesterId);
+			.existsByPlaylistIdAndSubscriberId(
+				playlistId,
+				currentUserId
+			);
 
 		return PlaylistResponse.from(playlist, getContentsOf(playlistId), subscriberCount, subscribedByMe);
 	}
 
 	@Transactional
-	public void deletePlaylist(UUID requesterId, UUID playlistId) {
+	public void deletePlaylist(UUID currentUserId, UUID playlistId) {
 		Playlist playlist = findPlaylistOrThrow(playlistId);
-		validateOwner(playlist, requesterId);
+		validateOwner(playlist, currentUserId);
 		playlistRepository.delete(playlist);
 	}
 
 	@Transactional
-	public void addContentToPlaylist(UUID requesterId, UUID playlistId, UUID contentId) {
+	public void addContentToPlaylist(
+		UUID currentUserId,
+		UUID playlistId,
+		UUID contentId
+	) {
 		Playlist playlist = findPlaylistOrThrow(playlistId);
-		validateOwner(playlist, requesterId);
+		validateOwner(playlist, currentUserId);
 
 		Content content = contentRepository.findByIdAndDeletedAtIsNull(contentId)
 			.orElseThrow(ContentNotFoundException::new);
@@ -173,9 +217,13 @@ public class PlaylistService {
 	}
 
 	@Transactional
-	public void removeContentFromPlaylist(UUID requesterId, UUID playlistId, UUID contentId) {
+	public void removeContentFromPlaylist(
+		UUID currentUserId,
+		UUID playlistId,
+		UUID contentId
+	) {
 		Playlist playlist = findPlaylistOrThrow(playlistId);
-		validateOwner(playlist, requesterId);
+		validateOwner(playlist, currentUserId);
 
 		PlaylistContent playlistContent = playlistContentRepository
 			.findByPlaylistIdAndContentId(playlistId, contentId)
@@ -184,7 +232,10 @@ public class PlaylistService {
 		playlistContentRepository.delete(playlistContent);
 	}
 
-	private List<PlaylistResponse> mapToResponsesWithContents(List<Playlist> playlists, UUID requesterId) {
+	private List<PlaylistResponse> mapToResponsesWithContents(
+		List<Playlist> playlists,
+		UUID currentUserId
+	) {
 		List<UUID> playlistIds = playlists.stream().map(Playlist::getId).toList();
 
 		Map<UUID, List<Content>> contentsByPlaylistId = playlistContentRepository
@@ -196,8 +247,11 @@ public class PlaylistService {
 
 		Map<UUID, Long> subscriberCountByPlaylistId = playlistSubscriptionRepository.countByPlaylistIdIn(playlistIds);
 
-		Set<UUID> subscribedPlaylistIds = requesterId != null
-			? playlistSubscriptionRepository.findSubscribedPlaylistIds(playlistIds, requesterId)
+		Set<UUID> subscribedPlaylistIds = currentUserId != null
+			? playlistSubscriptionRepository.findSubscribedPlaylistIds(
+			playlistIds,
+			currentUserId
+		)
 			: Set.of();
 
 		return playlists.stream()
@@ -214,8 +268,11 @@ public class PlaylistService {
 		return playlistRepository.findById(playlistId).orElseThrow(PlaylistNotFoundException::new);
 	}
 
-	private void validateOwner(Playlist playlist, UUID requesterId) {
-		if (!playlist.getOwner().getId().equals(requesterId)) {
+	private void validateOwner(
+		Playlist playlist,
+		UUID currentUserId
+	) {
+		if (!playlist.getOwner().getId().equals(currentUserId)) {
 			throw new PlaylistAccessDeniedException();
 		}
 	}

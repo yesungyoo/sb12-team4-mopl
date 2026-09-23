@@ -1,5 +1,6 @@
 package com.mopl.playlist.controller;
 
+import com.mopl.auth.util.SecurityUtil;
 import com.mopl.playlist.service.PlaylistSubscriptionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,19 +19,21 @@ public class PlaylistSubscriptionController {
 
 	@PostMapping
 	public ResponseEntity<Void> subscribe(
-		@RequestParam UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@PathVariable UUID playlistId
 	) {
-		playlistSubscriptionService.subscribe(requesterId, playlistId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		playlistSubscriptionService.subscribe(currentUserId, playlistId);
 		return ResponseEntity.noContent().build();
 	}
 
 	@DeleteMapping
 	public ResponseEntity<Void> unsubscribe(
-		@RequestParam UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@PathVariable UUID playlistId
 	) {
-		playlistSubscriptionService.unsubscribe(requesterId, playlistId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		playlistSubscriptionService.unsubscribe(currentUserId, playlistId);
 		return ResponseEntity.noContent().build();
 	}
 }

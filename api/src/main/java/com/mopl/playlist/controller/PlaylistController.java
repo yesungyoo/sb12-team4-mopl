@@ -1,7 +1,8 @@
 package com.mopl.playlist.controller;
 
+import com.mopl.auth.util.SecurityUtil;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.playlist.dto.PlaylistCreateRequest;
-import com.mopl.playlist.dto.PlaylistListResponse;
 import com.mopl.playlist.dto.PlaylistResponse;
 import com.mopl.playlist.dto.PlaylistUpdateRequest;
 import com.mopl.playlist.service.PlaylistService;
@@ -24,28 +25,39 @@ public class PlaylistController {
 
 	@GetMapping("/{playlistId}")
 	public ResponseEntity<PlaylistResponse> getPlaylist(
-		@PathVariable UUID playlistId,
-		@RequestParam(required = false) UUID requesterId // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
+		@PathVariable UUID playlistId
 	) {
-		PlaylistResponse response = playlistService.getPlaylist(playlistId, requesterId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		PlaylistResponse response =
+			playlistService.getPlaylist(playlistId, currentUserId);
 
 		return ResponseEntity.ok(response);
 	}
 
 	@GetMapping
-	public ResponseEntity<PlaylistListResponse> getPlaylists(
+	public ResponseEntity<CursorResponse<PlaylistResponse>> getPlaylists(
 		@RequestParam(required = false) String cursor,
 		@RequestParam(required = false) UUID idAfter,
 		@RequestParam int limit,
 		@RequestParam String sortBy,
 		@RequestParam String sortDirection,
-		@RequestParam(required = false) UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@RequestParam(required = false) UUID subscriberIdEqual,
 		@RequestParam(required = false) UUID ownerIdEqual,
 		@RequestParam(required = false) String keywordLike
 	) {
-		PlaylistListResponse response = playlistService.getPlaylists(
-			cursor, idAfter, limit, sortBy, sortDirection, requesterId, subscriberIdEqual, ownerIdEqual, keywordLike
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		CursorResponse<PlaylistResponse> response = playlistService.getPlaylists(
+			cursor,
+			idAfter,
+			limit,
+			sortBy,
+			sortDirection,
+			currentUserId,
+			subscriberIdEqual,
+			ownerIdEqual,
+			keywordLike
 		);
 
 		return ResponseEntity.ok(response);
@@ -53,10 +65,12 @@ public class PlaylistController {
 
 	@PostMapping
 	public ResponseEntity<PlaylistResponse> createPlaylist(
-		@RequestParam UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@Valid @RequestBody PlaylistCreateRequest request
 	) {
-		PlaylistResponse response = playlistService.createPlaylist(requesterId, request);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		PlaylistResponse response =
+			playlistService.createPlaylist(currentUserId, request);
 
 		URI location = URI.create("/playlists/" + response.id());
 
@@ -67,42 +81,57 @@ public class PlaylistController {
 
 	@PatchMapping("/{playlistId}")
 	public ResponseEntity<PlaylistResponse> updatePlaylist(
-		@RequestParam UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@PathVariable UUID playlistId,
 		@Valid @RequestBody PlaylistUpdateRequest request
 	) {
-		PlaylistResponse response = playlistService.updatePlaylist(requesterId, playlistId, request);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		PlaylistResponse response =
+			playlistService.updatePlaylist(currentUserId, playlistId, request);
 
 		return ResponseEntity.ok(response);
 	}
 
 	@DeleteMapping("/{playlistId}")
 	public ResponseEntity<Void> deletePlaylist(
-		@RequestParam UUID requesterId, // TODO: Security 완료 후 @AuthenticationPrincipal로 교체
 		@PathVariable UUID playlistId
 	) {
-		playlistService.deletePlaylist(requesterId, playlistId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		playlistService.deletePlaylist(currentUserId, playlistId);
 
 		return ResponseEntity.noContent().build();
 	}
 
 	@PostMapping("/{playlistId}/contents/{contentId}")
 	public ResponseEntity<Void> addContentToPlaylist(
-		@RequestParam UUID requesterId,
 		@PathVariable UUID playlistId,
 		@PathVariable UUID contentId
 	) {
-		playlistService.addContentToPlaylist(requesterId, playlistId, contentId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		playlistService.addContentToPlaylist(
+			currentUserId,
+			playlistId,
+			contentId
+		);
+
 		return ResponseEntity.noContent().build();
 	}
 
 	@DeleteMapping("/{playlistId}/contents/{contentId}")
 	public ResponseEntity<Void> removeContentFromPlaylist(
-		@RequestParam UUID requesterId,
 		@PathVariable UUID playlistId,
 		@PathVariable UUID contentId
 	) {
-		playlistService.removeContentFromPlaylist(requesterId, playlistId, contentId);
+		UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+		playlistService.removeContentFromPlaylist(
+			currentUserId,
+			playlistId,
+			contentId
+		);
+
 		return ResponseEntity.noContent().build();
 	}
 }
