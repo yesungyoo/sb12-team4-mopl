@@ -19,7 +19,6 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
-import org.junit.jupiter.api.Disabled;
 import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.common.exception.playlist.PlaylistContentAlreadyExistsException;
 import com.mopl.common.exception.playlist.PlaylistContentNotFoundException;
@@ -120,7 +119,6 @@ class PlaylistControllerTest {
 		}
 
 		@Test
-		@Disabled("공통 핸들러의 필수 파라미터 누락 400 처리 후 활성화 (GlobalExceptionHandler 후속 이슈)")
 		@DisplayName("limit 파라미터가 없으면 400을 반환한다")
 		void missingLimit_badRequest() throws Exception {
 			mockMvc.perform(get("/playlists")
@@ -224,7 +222,6 @@ class PlaylistControllerTest {
 		}
 
 		@Test
-		@Disabled("공통 핸들러의 필수 파라미터 누락 400 처리 후 활성화 (GlobalExceptionHandler 후속 이슈)")
 		@DisplayName("requesterId 없이 요청하면 400을 반환한다")
 		void missingRequesterId_badRequest() throws Exception {
 			PlaylistCreateRequest request = new PlaylistCreateRequest("제목", "설명");
@@ -233,6 +230,18 @@ class PlaylistControllerTest {
 							.contentType(MediaType.APPLICATION_JSON)
 							.content(objectMapper.writeValueAsString(request)))
 					.andExpect(status().isBadRequest());
+		}
+
+		@Test
+		@DisplayName("requesterId가 UUID 형식이 아니면 400을 반환한다")
+		void invalidRequesterIdType_badRequest() throws Exception {
+			PlaylistCreateRequest request = new PlaylistCreateRequest("제목", "설명");
+
+			mockMvc.perform(post("/playlists")
+					.param("requesterId", "invalid-uuid")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(request)))
+				.andExpect(status().isBadRequest());
 		}
 	}
 
