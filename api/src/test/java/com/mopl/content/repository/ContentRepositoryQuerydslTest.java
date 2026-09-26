@@ -90,10 +90,9 @@ class ContentRepositoryQuerydslTest {
     @DisplayName("제목 키워드가 포함된 콘텐츠를 조회한다")
     void searchByKeyword() {
         ContentSearchCondition condition = new ContentSearchCondition(
+                null,
                 "테스트",
-                null,
-                null,
-                null
+                List.of()
         );
 
         Page<Content> result = contentRepository.search(
@@ -115,10 +114,9 @@ class ContentRepositoryQuerydslTest {
     @DisplayName("콘텐츠 타입으로 필터링한다")
     void searchByType() {
         ContentSearchCondition condition = new ContentSearchCondition(
-                null,
                 ContentType.MOVIE,
                 null,
-                null
+                List.of()
         );
 
         Page<Content> result = contentRepository.search(
@@ -132,37 +130,12 @@ class ContentRepositoryQuerydslTest {
     }
 
     @Test
-    @DisplayName("출시일 범위로 콘텐츠를 조회한다")
-    void searchByReleaseDateRange() {
-        ContentSearchCondition condition = new ContentSearchCondition(
-                null,
-                null,
-                LocalDate.of(2026, 1, 1),
-                LocalDate.of(2026, 12, 31)
-        );
-
-        Page<Content> result = contentRepository.search(
-                condition,
-                PageRequest.of(0, 20)
-        );
-
-        assertThat(result.getContent()).hasSize(2);
-        assertThat(result.getContent())
-                .extracting(Content::getTitle)
-                .containsExactlyInAnyOrder(
-                        "테스트 영화 B",
-                        "챔피언십 경기"
-                );
-    }
-
-    @Test
     @DisplayName("여러 검색 조건을 동시에 적용한다")
     void searchByMultipleConditions() {
         ContentSearchCondition condition = new ContentSearchCondition(
-                "테스트",
                 ContentType.MOVIE,
-                LocalDate.of(2026, 1, 1),
-                null
+                "B",
+                List.of()
         );
 
         Page<Content> result = contentRepository.search(
@@ -179,10 +152,9 @@ class ContentRepositoryQuerydslTest {
     @DisplayName("삭제된 콘텐츠는 검색 결과에서 제외한다")
     void excludeDeletedContent() {
         ContentSearchCondition condition = new ContentSearchCondition(
+                null,
                 "삭제된 테스트 영화",
-                null,
-                null,
-                null
+                List.of()
         );
 
         Page<Content> result = contentRepository.search(
@@ -198,10 +170,9 @@ class ContentRepositoryQuerydslTest {
     @DisplayName("평점 내림차순으로 정렬한다")
     void sortByExternalRatingDescending() {
         ContentSearchCondition condition = new ContentSearchCondition(
-                null,
                 ContentType.MOVIE,
                 null,
-                null
+                List.of()
         );
 
         Pageable pageable = PageRequest.of(
@@ -230,10 +201,9 @@ class ContentRepositoryQuerydslTest {
     @DisplayName("검색 결과에 페이지네이션을 적용한다")
     void searchWithPagination() {
         ContentSearchCondition condition = new ContentSearchCondition(
-                null,
                 ContentType.MOVIE,
                 null,
-                null
+                List.of()
         );
 
         Pageable pageable = PageRequest.of(

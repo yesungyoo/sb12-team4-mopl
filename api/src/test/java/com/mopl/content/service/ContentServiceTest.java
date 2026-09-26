@@ -4,6 +4,7 @@ import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.content.dto.*;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.service.ContentSearchService;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
@@ -21,8 +22,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,45 +85,92 @@ class ContentServiceTest {
     @Test
     @DisplayName("삭제되지 않은 콘텐츠 목록을 페이지 단위로 조회한다")
     void getContentsSuccess() {
-        Pageable pageable = PageRequest.of(0, 20);
-        Content firstContent = createContent("테스트 영화 A");
-        Content secondContent = createContent("테스트 영화 B");
+        String cursor = null;
+        UUID idAfter = null;
+        int limit = 20;
+        String sortBy = "createdAt";
+        String sortDirection = "DESCENDING";
 
         ContentSearchCondition condition = new ContentSearchCondition(
                 null,
                 null,
+                List.of()
+        );
+
+        ContentListItemResponse firstContent = firstContent = new ContentListItemResponse(
+                UUID.randomUUID(),
+                ContentType.MOVIE,
+                "테스트 영화 A",
+                "테스트 설명",
                 null,
-                null
+                List.of("SF"),
+                4.5,
+                10L,
+                20L
         );
 
-        ContentListResponse searchResponse = new ContentListResponse(
+        ContentListItemResponse secondContent = new ContentListItemResponse(
+                UUID.randomUUID(),
+                ContentType.MOVIE,
+                "테스트 영화 B",
+                "테스트 설명",
+                null,
+                List.of("DRAMA"),
+                4.0,
+                5L,
+                12L
+        );
+
+        CursorResponse<ContentListItemResponse> searchResponse = CursorResponse.of(
                 List.of(
-                        ContentResponse.from(firstContent),
-                        ContentResponse.from(secondContent)
+                        firstContent,
+                        secondContent
                 ),
-                0,
-                20,
-                2,
-                1
+                null,
+                null,
+                false,
+                2L,
+                sortBy,
+                sortDirection
         );
 
-        when(contentSearchService.search(condition, pageable))
-                .thenReturn(searchResponse);
+        when(contentSearchService.search(
+                condition,
+                cursor,
+                idAfter,
+                limit,
+                sortBy,
+                sortDirection
+        )).thenReturn(searchResponse);
 
-        ContentListResponse response =
-                contentService.getContents(condition, pageable);
+        CursorResponse<ContentListItemResponse> response = contentService.getContents(
+                condition,
+                cursor,
+                idAfter,
+                limit,
+                sortBy,
+                sortDirection
+        );
 
-        assertThat(response.contents()).hasSize(2);
-        assertThat(response.contents().get(0).title())
+        assertThat(response.data()).hasSize(2);
+        assertThat(response.data().get(0).title())
                 .isEqualTo("테스트 영화 A");
-        assertThat(response.contents().get(1).title())
+        assertThat(response.data().get(1).title())
                 .isEqualTo("테스트 영화 B");
-        assertThat(response.page()).isZero();
-        assertThat(response.size()).isEqualTo(20);
-        assertThat(response.totalElements()).isEqualTo(2);
-        assertThat(response.totalPages()).isEqualTo(1);
 
-        verify(contentSearchService).search(condition, pageable);
+        assertThat(response.hasNext()).isFalse();
+        assertThat(response.totalCount()).isEqualTo(2L);
+        assertThat(response.sortBy()).isEqualTo("createdAt");
+        assertThat(response.sortDirection()).isEqualTo("DESCENDING");
+
+        verify(contentSearchService).search(
+                condition,
+                cursor,
+                idAfter,
+                limit,
+                sortBy,
+                sortDirection
+        );
     }
 
     @Test

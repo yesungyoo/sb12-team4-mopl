@@ -60,6 +60,15 @@ public class ContentSearchDocument {
     @Field(type = FieldType.Long)
     private Long externalVoteCount;
 
+    @Field(type = FieldType.Double)
+    private Double averageRating;
+
+    @Field(type = FieldType.Long)
+    private Long reviewCount;
+
+    @Field(type = FieldType.Long)
+    private Long watcherCount;
+
     @Field(type = FieldType.Nested)
     private List<ContentTagSearchDocument> tags;
 
@@ -79,7 +88,29 @@ public class ContentSearchDocument {
     )
     private List<Float> embedding;
 
-    public static ContentSearchDocument from(Content content, List<ContentTag> contentTags, List<Double> embedding) {
+    public static ContentSearchDocument from(
+            Content content,
+            List<ContentTag> contentTags,
+            List<Double> embedding
+    ) {
+        return from(
+                content,
+                contentTags,
+                embedding,
+                null,
+                0L,
+                0L
+        );
+    }
+
+    public static ContentSearchDocument from(
+            Content content,
+            List<ContentTag> contentTags,
+            List<Double> embedding,
+            Double averageRating,
+            long reviewCount,
+            long watcherCount
+    ) {
         List<ContentTagSearchDocument> tags = contentTags.stream()
                 .map(ContentTagSearchDocument::from)
                 .toList();
@@ -100,9 +131,22 @@ public class ContentSearchDocument {
                 content.getExternalPopularity() == null ? null : content.getExternalPopularity().doubleValue(),
                 content.getExternalRating() == null ? null : content.getExternalRating().doubleValue(),
                 content.getExternalVoteCount(),
+                averageRating == null ? 0.0 : averageRating,
+                reviewCount,
+                watcherCount,
                 tags,
                 content.getCreatedAt(),
                 floatEmbedding
         );
+    }
+
+    public void updateStatistics(
+            Double averageRating,
+            long reviewCount,
+            long watcherCount
+    ) {
+        this.averageRating = averageRating == null ? 0.0 : averageRating;
+        this.reviewCount = reviewCount;
+        this.watcherCount = watcherCount;
     }
 }

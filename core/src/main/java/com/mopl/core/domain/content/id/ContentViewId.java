@@ -10,7 +10,7 @@ import java.util.UUID;
 @Embeddable
 public class ContentViewId implements Serializable {
 
-    @Column(name = "user+id", nullable = false, columnDefinition = "CHAR(36)")
+    @Column(name = "user_id", nullable = false, columnDefinition = "CHAR(36)")
     private UUID userId;
 
     @Column(name = "content_id", nullable = false, columnDefinition = "CHAR(36)")

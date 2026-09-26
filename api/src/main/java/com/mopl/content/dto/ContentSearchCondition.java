@@ -3,11 +3,17 @@ package com.mopl.content.dto;
 import com.mopl.core.common.enums.ContentType;
 
 import java.time.LocalDate;
+import java.util.List;
 
 public record ContentSearchCondition(
-        String keyword,
-        ContentType type,
-        LocalDate releaseDateFrom,
-        LocalDate releaseDateTo
+        ContentType typeEqual,
+        String keywordLike,
+        List<String> tagsIn
 ) {
+
+    public ContentSearchCondition {
+        tagsIn = tagsIn == null
+                ? List.of()
+                : List.copyOf(tagsIn);
+    }
 }

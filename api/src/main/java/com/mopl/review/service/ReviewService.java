@@ -7,6 +7,7 @@ import com.mopl.common.exception.review.ReviewAlreadyExistsException;
 import com.mopl.common.exception.review.ReviewNotFoundException;
 import com.mopl.common.exception.user.UserErrorCode;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.event.ContentSearchStatisticsSyncEvent;
 import com.mopl.core.common.event.FollowingReviewCreatedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.review.entity.Review;
@@ -84,6 +85,8 @@ public class ReviewService {
 
         publishReviewCreatedEvent(user, content);
 
+        publishContentSearchStatisticsSyncEvent(contentId);
+
         return ReviewResponse.from(savedReview);
     }
 
@@ -100,6 +103,10 @@ public class ReviewService {
                 request.text()
         );
 
+        publishContentSearchStatisticsSyncEvent(
+                review.getContent().getId()
+        );
+
         return ReviewResponse.from(review);
     }
 
@@ -111,7 +118,11 @@ public class ReviewService {
 
         validateAuthor(review, userId);
 
+        UUID contentId = review.getContent().getId();
+
         reviewRepository.delete(review);
+
+        publishContentSearchStatisticsSyncEvent(contentId);
     }
 
     private User findActiveUser(UUID userId) {
@@ -138,5 +149,11 @@ public class ReviewService {
         eventPublisher.publishEvent(new FollowingReviewCreatedEvent(
                 followerIds, user.getName(), content.getTitle()
         ));
+    }
+
+    private void publishContentSearchStatisticsSyncEvent(UUID contentId) {
+        eventPublisher.publishEvent(
+                new ContentSearchStatisticsSyncEvent(contentId)
+        );
     }
 }

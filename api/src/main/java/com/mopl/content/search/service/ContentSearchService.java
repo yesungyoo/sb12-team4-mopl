@@ -7,6 +7,10 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import com.mopl.common.exception.CommonErrorCode;
+import com.mopl.common.exception.MoplException;
+import com.mopl.content.dto.*;
+import com.mopl.core.common.dto.CursorResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -20,9 +24,6 @@ import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import com.mopl.content.dto.ContentListResponse;
-import com.mopl.content.dto.ContentResponse;
-import com.mopl.content.dto.ContentSearchCondition;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.core.domain.content.entity.Content;
@@ -34,14 +35,37 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class ContentSearchService {
 
+    private static final int MAX_LIMIT = 100;
+    private static final String TAGS_PATH = "tags";
+    private static final String TAG_VALUE_FIELD = "tags.value";
+
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentRepository contentRepository;
 
-    public ContentListResponse search(
+    public CursorResponse<ContentListItemResponse> search(
             ContentSearchCondition condition,
-            Pageable pageable
+            String cursor,
+            UUID idAfter,
+            int limit,
+            String sortByParam,
+            String sortDirectionParam
     ) {
-        NativeQuery query = buildQuery(condition, pageable);
+        validateRequest(cursor, idAfter, limit);
+
+        int safeLimit = Math.min(limit, MAX_LIMIT);
+
+        ContentSortBy sortBy = ContentSortBy.from(sortByParam);
+
+        ContentSortDirection sortDirection = ContentSortDirection.from(sortDirectionParam);
+
+        NativeQuery query = buildQuery(
+                condition,
+                cursor,
+                idAfter,
+                safeLimit + 1,
+                sortBy,
+                sortDirection
+        );
 
         SearchHits<ContentSearchDocument> searchHits =
                 elasticsearchOperations.search(
@@ -49,55 +73,106 @@ public class ContentSearchService {
                         ContentSearchDocument.class
                 );
 
-        List<UUID> contentIds = searchHits.getSearchHits().stream()
+        List<SearchHit<ContentSearchDocument>> hits = searchHits.getSearchHits();
+
+        boolean hasNext = hits.size() > safeLimit;
+
+        List<SearchHit<ContentSearchDocument>> pageHits = hasNext
+                ? hits.subList(0, safeLimit)
+                : hits;
+
+        List<UUID> contentIds = pageHits.stream()
                 .map(SearchHit::getContent)
                 .map(ContentSearchDocument::getId)
                 .map(UUID::fromString)
                 .toList();
 
-        if (contentIds.isEmpty()) {
-            Page<ContentResponse> emptyPage = new PageImpl<>(
-                    List.of(),
-                    pageable,
-                    searchHits.getTotalHits()
-            );
+        Map<UUID, Content> contentById = contentRepository
+                .findAllByIdInAndDeletedAtIsNull(contentIds)
+                .stream()
+                .collect(Collectors.toMap(
+                        Content::getId,
+                        content -> content
+                ));
 
-            return ContentListResponse.from(emptyPage);
+        List<ContentListItemResponse> data =
+                pageHits.stream()
+                        .map(hit ->
+                                toResponse(
+                                        hit,
+                                        contentById
+                                )
+                        )
+                        .filter(Objects::nonNull)
+                        .toList();
+
+        String nextCursor = null;
+        String nextIdAfter = null;
+
+        if (hasNext && !pageHits.isEmpty()) {
+            SearchHit<ContentSearchDocument> lastHit =
+                    pageHits.get(pageHits.size() - 1);
+
+            List<Object> sortValues = lastHit.getSortValues();
+
+            if (sortValues.size() >= 2) {
+                nextCursor = String.valueOf(
+                                sortValues.get(0)
+                        );
+
+                nextIdAfter = lastHit.getContent().getId();
+            }
         }
 
-        List<Content> contents =
-                contentRepository.findAllByIdInAndDeletedAtIsNull(contentIds);
-
-        Map<UUID, Content> contentById = contents.stream()
-                .collect(
-                        Collectors.toMap(
-                                Content::getId,
-                                content -> content
-                        )
-                );
-
-        List<ContentResponse> responses = contentIds.stream()
-                .map(contentById::get)
-                .filter(Objects::nonNull)
-                .map(ContentResponse::from)
-                .toList();
-
-        Page<ContentResponse> contentPage = new PageImpl<>(
-                responses,
-                pageable,
-                searchHits.getTotalHits()
+        return CursorResponse.of(
+                data,
+                nextCursor,
+                nextIdAfter,
+                hasNext,
+                searchHits.getTotalHits(),
+                sortByParam,
+                sortDirectionParam
         );
+    }
 
-        return ContentListResponse.from(contentPage);
+    private ContentListItemResponse toResponse(
+            SearchHit<ContentSearchDocument> hit,
+            Map<UUID, Content> contentById
+    ) {
+        ContentSearchDocument document = hit.getContent();
+
+        UUID contentId = UUID.fromString(document.getId());
+
+        Content content = contentById.get(contentId);
+
+        if (content == null) {
+            return null;
+        }
+
+        return ContentListItemResponse.from(
+                content,
+                document
+        );
     }
 
     private NativeQuery buildQuery(
             ContentSearchCondition condition,
-            Pageable pageable
+            String cursor,
+            UUID idAfter,
+            int limitPlusOne,
+            ContentSortBy sortBy,
+            ContentSortDirection sortDirection
     ) {
         NativeQueryBuilder queryBuilder = NativeQuery.builder()
-                .withQuery(buildSearchQuery(condition.keyword()))
-                .withPageable(toElasticsearchPageable(pageable))
+                .withQuery(buildSearchQuery(condition.keywordLike()))
+                .withPageable(PageRequest.of(
+                        0,
+                        limitPlusOne,
+                        buildSort(
+                                sortBy,
+                                sortDirection
+                        )
+                ))
                 .withTrackTotalHits(true);
 
         List<Query> filters = buildFilters(condition);
@@ -108,16 +183,26 @@ public class ContentSearchService {
             );
         }
 
+        if (cursor != null && idAfter != null) {
+            queryBuilder.withSearchAfter(
+                    buildSearchAfter(
+                            cursor,
+                            idAfter,
+                            sortBy
+                    )
+            );
+        }
+
         return queryBuilder.build();
     }
 
-    private Query buildSearchQuery(String keyword) {
-        if (!StringUtils.hasText(keyword)) {
+    private Query buildSearchQuery(String keywordLike) {
+        if (!StringUtils.hasText(keywordLike)) {
             return Query.of(q -> q.matchAll(m -> m));
         }
 
         return Query.of(q -> q.multiMatch(m -> m
-                .query(keyword)
+                .query(keywordLike)
                 .fields(
                         "title^2",
                         "description"
@@ -128,80 +213,92 @@ public class ContentSearchService {
     private List<Query> buildFilters(ContentSearchCondition condition) {
         List<Query> filters = new ArrayList<>();
 
-        if (condition.type() != null) {
+        if (condition.typeEqual() != null) {
             filters.add(
                     Query.of(q -> q.term(t -> t
                             .field("type")
-                            .value(condition.type().name())
+                            .value(condition.typeEqual().name())
                     ))
             );
         }
 
-        if (condition.releaseDateFrom() != null
-                || condition.releaseDateTo() != null) {
+        List<Query> tagValueQueries = condition.tagsIn().stream()
+                .filter(StringUtils::hasText)
+                .map(value -> Query.of(query ->
+                        query.term(term -> term.field(TAG_VALUE_FIELD)
+                                .value(value)))
+                )
+                .toList();
 
-            filters.add(
-                    Query.of(q -> q.range(r -> r.date(d -> {
-                        d.field("releaseDate");
+        if (!tagValueQueries.isEmpty()) {
+            Query tagValuesQuery = Query.of(query -> query.bool(bool ->
+                    bool.should(tagValueQueries)
+                            .minimumShouldMatch("1")));
 
-                        if (condition.releaseDateFrom() != null) {
-                            d.gte(
-                                    condition.releaseDateFrom().toString()
-                            );
-                        }
-
-                        if (condition.releaseDateTo() != null) {
-                            d.lte(
-                                    condition.releaseDateTo().toString()
-                            );
-                        }
-
-                        return d;
-                    })))
-            );
+            filters.add(Query.of(query -> query.nested(nested ->
+                    nested.path(TAGS_PATH)
+                            .query(tagValuesQuery))));
         }
-
         return filters;
     }
 
-    private Pageable toElasticsearchPageable(Pageable pageable) {
-        List<Sort.Order> orders = new ArrayList<>();
+    private Sort buildSort(
+            ContentSortBy sortBy,
+            ContentSortDirection sortDirection
+    ) {
+        Sort.Direction direction = sortDirection
+                == ContentSortDirection.ASCENDING
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
 
-        for (Sort.Order order : pageable.getSort()) {
-            String property =
-                    toElasticsearchSortProperty(order.getProperty());
+        return Sort.by(new Sort.Order(
+                direction,
+                sortBy.getElasticsearchField()
+        ),
+                Sort.Order.asc("id"));
+    }
 
-            if (property != null) {
-                orders.add(
-                        new Sort.Order(
-                                order.getDirection(),
-                                property
-                        )
-                );
-            }
-        }
+    private List<Object> buildSearchAfter(
+            String cursor,
+            UUID idAfter,
+            ContentSortBy sortBy
+    ) {
+        Object cursorValue = parseCursor(cursor, sortBy);
 
-        if (orders.isEmpty()) {
-            orders.add(Sort.Order.desc("createdAt"));
-        }
-
-        orders.add(Sort.Order.asc("id"));
-
-        return PageRequest.of(
-                pageable.getPageNumber(),
-                pageable.getPageSize(),
-                Sort.by(orders)
+        return List.of(
+                cursorValue,
+                idAfter.toString()
         );
     }
 
-    private String toElasticsearchSortProperty(String property) {
-        return switch (property) {
-            case "createdAt" -> "createdAt";
-            case "releaseDate" -> "releaseDate";
-            case "title" -> "title.keyword";
-            case "externalPopularity" -> "externalPopularity";
-            case "externalRating" -> "externalRating";
-            default -> null;
-        };
+    private Object parseCursor(
+            String cursor,
+            ContentSortBy sortBy
+    ) {
+        try {
+            return switch (sortBy) {
+                // Elasticsearch data sort value는 epoch millis 기반
+                case CREATED_AT -> Long.parseLong(cursor);
+                case WATCHER_COUNT -> Long.parseLong(cursor);
+                case RATE -> Double.parseDouble(cursor);
+            };
+        } catch (NumberFormatException e) {
+            throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+        }
+    }
+
+    private void validateRequest(
+            String cursor,
+            UUID idAfter,
+            int limit
+    ) {
+        if (limit <= 0) {
+            throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        // cursor와 idAfter는 둘 다 있거나 둘 다 없어야 함
+        if ((cursor == null) != (idAfter == null)) {
+            throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+        }
     }
 }

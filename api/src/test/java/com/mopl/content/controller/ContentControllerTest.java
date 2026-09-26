@@ -5,6 +5,7 @@ import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.content.dto.*;
 import com.mopl.content.search.service.SemanticSearchService;
 import com.mopl.content.service.ContentService;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 
@@ -23,8 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -84,39 +84,52 @@ public class ContentControllerTest {
     }
 
     @Test
-    @DisplayName("콘텐츠 목록 조회에 성공하면 200을 반환한다")
+    @DisplayName("콘텐츠 목록 조회에 성공하면 커서 응답과 200을 반환한다")
     void getContentsSuccess() throws Exception {
-        ContentResponse firstContent = createResponse(
+        ContentListItemResponse firstContent = createListItemResponse(
                 UUID.randomUUID(),
                 "테스트 영화 A"
         );
 
-        ContentResponse secondContent = createResponse(
+        ContentListItemResponse secondContent = createListItemResponse(
                 UUID.randomUUID(),
                 "테스트 영화 B"
         );
 
-        ContentListResponse response = new ContentListResponse(
+        CursorResponse<ContentListItemResponse> response = CursorResponse.of(
                 List.of(firstContent, secondContent),
-                0,
-                20,
-                2,
-                1
+                null,
+                null,
+                false,
+                2L,
+                "createdAt",
+                "DESCENDING"
         );
 
         when(contentService.getContents(
-                        any(ContentSearchCondition.class),
-                        any(Pageable.class)
-                )
-        ).thenReturn(response);
+                any(ContentSearchCondition.class),
+                isNull(),
+                isNull(),
+                eq(20),
+                eq("createdAt"),
+                eq("DESCENDING")
+        )).thenReturn(response);
 
-        mockMvc.perform(get("/contents"))
+        mockMvc.perform(get("/contents")
+                        .param("typeEqual", "movie")
+                        .param("keywordLike", "테스트")
+                        .param("limit", "20")
+                        .param("sortBy", "createdAt")
+                        .param("sortDirection", "DESCENDING"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.contents.length()").value(2))
-                .andExpect(jsonPath("$.contents[0].title").value("테스트 영화 A"))
-                .andExpect(jsonPath("$.page").value(0))
-                .andExpect(jsonPath("$.size").value(20))
-                .andExpect(jsonPath("$.totalElements").value(2));
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].title").value("테스트 영화 A"))
+                .andExpect(jsonPath("$.data[1].title").value("테스트 영화 B"))
+
+                .andExpect(jsonPath("$.hasNext").value(false))
+                .andExpect(jsonPath("$.totalCount").value(2))
+                .andExpect(jsonPath("$.sortBy").value("createdAt"))
+                .andExpect(jsonPath("$.sortDirection").value("DESCENDING"));
     }
 
     @Test
@@ -300,6 +313,23 @@ public class ContentControllerTest {
                 null,
                 LocalDateTime.of(2026, 9, 8, 12, 0),
                 LocalDateTime.of(2026, 9, 8, 12, 0)
+        );
+    }
+
+    private ContentListItemResponse createListItemResponse(
+            UUID contentId,
+            String title
+    ) {
+        return new ContentListItemResponse(
+                contentId,
+                ContentType.MOVIE,
+                title,
+                "테스트 설명",
+                null,
+                List.of("SF"),
+                4.5,
+                10L,
+                20L
         );
     }
 }

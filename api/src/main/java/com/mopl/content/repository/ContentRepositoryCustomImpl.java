@@ -35,10 +35,8 @@ public class ContentRepositoryCustomImpl implements ContentRepositoryCustom {
                 .selectFrom(content)
                 .where(
                         content.deletedAt.isNull(),
-                        titleContains(condition.keyword()),
-                        typeEq(condition.type()),
-                        releaseDateGoe(condition.releaseDateFrom()),
-                        releaseDateLoe(condition.releaseDateTo())
+                        titleContains(condition.keywordLike()),
+                        typeEq(condition.typeEqual())
                 );
 
         for (OrderSpecifier<?> orderSpecifier : getOrderSpecifiers(pageable)) {
@@ -54,10 +52,8 @@ public class ContentRepositoryCustomImpl implements ContentRepositoryCustom {
                 .from(content)
                 .where(
                         content.deletedAt.isNull(),
-                        titleContains(condition.keyword()),
-                        typeEq(condition.type()),
-                        releaseDateGoe(condition.releaseDateFrom()),
-                        releaseDateLoe(condition.releaseDateTo())
+                        titleContains(condition.keywordLike()),
+                        typeEq(condition.typeEqual())
                 )
                 .fetchOne();
 

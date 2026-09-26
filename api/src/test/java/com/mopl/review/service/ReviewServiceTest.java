@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.mopl.content.search.event.ContentSearchStatisticsSyncEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -418,8 +419,11 @@ public class ReviewServiceTest {
     void deleteReviewSuccess() {
         UUID userId = UUID.randomUUID();
         UUID reviewId = UUID.randomUUID();
+        UUID contentId = UUID.randomUUID();
 
         Review review = mock(Review.class);
+
+        Content content = mock(Content.class);
 
         when(reviewRepository.findById(reviewId))
                 .thenReturn(Optional.of(review));
@@ -427,12 +431,21 @@ public class ReviewServiceTest {
         when(review.isWrittenBy(userId))
                 .thenReturn(true);
 
+        when(review.getContent())
+                .thenReturn(content);
+
+        when(content.getId())
+                .thenReturn(contentId);
+
         reviewService.deleteReview(
                 userId,
                 reviewId
         );
 
         verify(reviewRepository).delete(review);
+        verify(eventPublisher).publishEvent(
+                new ContentSearchStatisticsSyncEvent(contentId)
+        );
     }
 
     @Test
