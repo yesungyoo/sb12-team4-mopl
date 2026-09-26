@@ -66,17 +66,19 @@ public class UserController {
         return userService.getUsers(condition);
     }
 
-    /** 본인 프로필 변경 (이름 / 이미지) */
+    /**
+     * 본인 프로필 변경 (이름 / 이미지). image 를 안 보내거나 S3 미연동 상태면 기존 이미지 URL 유지.
+     * 리뷰 반영: 이미지 업로드를 컨트롤러에서 먼저 하지 않고, 권한/대상 검증이 끝난 뒤 Service 흐름
+     * 안에서 수행하도록 옮김 - 검증 실패 시 불필요한 S3 쓰기(orphan 객체 생성)를 막기 위함.
+     */
     @PatchMapping(value = "/{userId}", consumes = "multipart/form-data")
     public UserResponse updateProfile(
             @PathVariable UUID userId,
             @RequestPart UserProfileUpdateRequest request,
             @RequestPart(required = false) MultipartFile image
     ) {
-        // TODO: image 가 존재하면 S3 업로드 후 URL 을 profileImageUrl 로 전달
-        String profileImageUrl = null;
         UUID requesterId = SecurityUtil.getCurrentUserId();
-        return userService.updateProfile(requesterId, userId, request.name(), profileImageUrl);
+        return userService.updateProfile(requesterId, userId, request.name(), image);
     }
 
     /** 본인 탈퇴 */

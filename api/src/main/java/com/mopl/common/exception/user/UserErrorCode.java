@@ -58,6 +58,11 @@ public enum UserErrorCode implements ErrorCode {
             HttpStatus.BAD_REQUEST,
             "USER_010",
             "잘못된 페이지네이션 파라미터입니다."
+    ),
+    INVALID_IMAGE_FILE(
+            HttpStatus.BAD_REQUEST,
+            "USER_011",
+            "지원하지 않는 이미지 파일입니다."
     );
 
     private final HttpStatus status;

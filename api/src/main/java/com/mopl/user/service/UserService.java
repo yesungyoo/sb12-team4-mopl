@@ -3,6 +3,7 @@ package com.mopl.user.service;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.common.exception.MoplException;
 import com.mopl.common.exception.user.UserErrorCode;
+import com.mopl.common.storage.ImageUploader;
 import com.mopl.core.common.enums.UserRole;
 import com.mopl.core.common.event.RoleChangedEvent;
 import com.mopl.core.domain.user.entity.User;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -26,16 +28,22 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class UserService {
 
+    /** 리뷰 반영: 허용 이미지 MIME 타입 화이트리스트. 실제 파일 시그니처 검사는 추후 보완 예정(TODO). */
+    private static final Set<String> ALLOWED_IMAGE_CONTENT_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
+    private static final long MAX_IMAGE_SIZE_BYTES = 5L * 1024 * 1024; // 5MB, 자료에 명시 없어 임의로 정함 - 확인 필요
+
     private final UserRepository userRepository;
     private final TokenRedisService tokenRedisService;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher eventPublisher;
+    private final ImageUploader imageUploader;
 
     // ===================== 회원가입 =====================
 
@@ -147,14 +155,43 @@ public class UserService {
 
     // ===================== 프로필 변경 (본인만) =====================
 
+    /**
+     * 리뷰 반영: 권한/대상 검증(요청자 본인 여부, 사용자 존재 여부) 이후에만 이미지를 업로드한다.
+     * 검증 전에 업로드부터 하면, 검증 실패 시에도 S3 에 orphan 객체가 남을 수 있어서 순서를 바꿨다.
+     */
     @Transactional
-    public UserResponse updateProfile(UUID requesterId, UUID targetUserId, String name, String profileImageUrl) {
+    public UserResponse updateProfile(UUID requesterId, UUID targetUserId, String name, MultipartFile image) {
         if (!requesterId.equals(targetUserId)) {
             throw new MoplException(UserErrorCode.ACCESS_DENIED);
         }
         findActiveUserOrThrow(targetUserId); // 존재/탈퇴 여부 확인
+
+        String profileImageUrl = null;
+        if (image != null && !image.isEmpty()) {
+            validateImage(image);
+            profileImageUrl = imageUploader.upload(image);
+        }
+
         userRepository.updateProfile(targetUserId, name, profileImageUrl);
         return UserResponse.from(findActiveUserOrThrow(targetUserId));
+    }
+
+    /** 리뷰 반영: 최소한의 MIME 타입/크기 검증. getContentType() 은 클라이언트가 보낸 값을 그대로 신뢰하는
+     *  한계가 있어서, 실제 파일 시그니처 검사는 추후 보완 필요(TODO, 후속 이슈로 분리). */
+    private void validateImage(MultipartFile image) {
+        String contentType = image.getContentType();
+        if (contentType == null || !ALLOWED_IMAGE_CONTENT_TYPES.contains(contentType)) {
+            throw new MoplException(
+                    UserErrorCode.INVALID_IMAGE_FILE,
+                    "지원하지 않는 이미지 형식입니다. contentType=" + contentType
+            );
+        }
+        if (image.getSize() > MAX_IMAGE_SIZE_BYTES) {
+            throw new MoplException(
+                    UserErrorCode.INVALID_IMAGE_FILE,
+                    "이미지 크기는 " + (MAX_IMAGE_SIZE_BYTES / 1024 / 1024) + "MB 이하여야 합니다. size=" + image.getSize()
+            );
+        }
     }
 
     // ===================== 탈퇴 정책 =====================

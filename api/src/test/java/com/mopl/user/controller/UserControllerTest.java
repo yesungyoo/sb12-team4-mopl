@@ -36,6 +36,9 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * SecurityConfig 를 @Import 하면 그 생성자가 필요로 하는 협력자들을
  * 이 slice 컨텍스트가 못 찾으므로 @MockitoBean 으로 채워준다.
+ *
+ * 리뷰 반영: 이미지 업로드가 UserService 내부로 옮겨지면서 UserController 는 더 이상
+ * ImageUploader 를 직접 의존하지 않아 관련 MockitoBean 을 제거했다.
  */
 @WebMvcTest(UserController.class)
 @Import(SecurityConfig.class)

@@ -55,4 +55,8 @@ dependencies {
     test {
         environment "JWT_SECRET", "test-only-secret-key-never-use-in-production-1234567890"
     }
+
+    // S3 (이미지 업로드) - 버킷/자격증명 설정 없으면 NoOpImageUploader 가 대신 동작
+    implementation platform('software.amazon.awssdk:bom:2.29.22')
+    implementation 'software.amazon.awssdk:s3'
 }
