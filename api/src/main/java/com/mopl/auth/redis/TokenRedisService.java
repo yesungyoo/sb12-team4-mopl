@@ -1,12 +1,13 @@
 package com.mopl.auth.redis;
 
-import com.mopl.auth.jwt.JwtProperties;
+import com.mopl.infrastructure.security.jwt.JwtProperties;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import com.mopl.infrastructure.security.token.AccessTokenInvalidationService;
 
 /**
  * NOTE: StringRedisTemplate 빈은 infrastructure 모듈에서 이미 제공한다고 가정합니다.
@@ -17,8 +18,8 @@ import org.springframework.stereotype.Service;
 public class TokenRedisService {
 
     private static final String REFRESH_TOKEN_PREFIX = "auth:refresh:";
-    private static final String INVALIDATE_PREFIX = "auth:invalidate:";
 
+    private final AccessTokenInvalidationService accessTokenInvalidationService;
     private final StringRedisTemplate redisTemplate;
     private final JwtProperties jwtProperties;
 
@@ -49,20 +50,11 @@ public class TokenRedisService {
      * TTL 은 access token 최대 수명만큼만 유지.
      */
     public void invalidateTokensIssuedBefore(UUID userId, Instant now) {
-        redisTemplate.opsForValue().set(
-                INVALIDATE_PREFIX + userId,
-                String.valueOf(now.toEpochMilli()),
-                Duration.ofSeconds(jwtProperties.accessTokenExpirationSeconds())
-        );
+        accessTokenInvalidationService.invalidateTokensIssuedBefore(userId, now);
     }
 
     /** issuedAt 시점에 발급된 토큰이 이후 무효화 처리 대상인지 확인 */
     public boolean isInvalidated(UUID userId, Instant issuedAt) {
-        String value = redisTemplate.opsForValue().get(INVALIDATE_PREFIX + userId);
-        if (value == null) {
-            return false;
-        }
-        long invalidatedAtEpochMilli = Long.parseLong(value);
-        return issuedAt.toEpochMilli() <= invalidatedAtEpochMilli;
+        return accessTokenInvalidationService.isInvalidated(userId, issuedAt);
     }
 }

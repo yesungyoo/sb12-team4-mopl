@@ -20,3 +20,13 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+websocket:
+  allowed-origins:
+    - "http://localhost:*"
+    - "http://127.0.0.1:*"
+
+jwt:
+  secret: local-dev-secret-key-please-change-this-in-real-env-1234567890
+  access-token-expiration-seconds: 1800
+  refresh-token-expiration-seconds: 1209600

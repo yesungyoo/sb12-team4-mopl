@@ -12,7 +12,7 @@ import com.mopl.auth.config.SecurityConfig;
 import com.mopl.auth.handler.LoginFailureHandler;
 import com.mopl.auth.handler.LoginSuccessHandler;
 import com.mopl.auth.handler.LogoutSuccessHandlerImpl;
-import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.provider.EmailPasswordAuthenticationProvider;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.core.common.enums.UserRole;

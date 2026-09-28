@@ -2,7 +2,7 @@ package com.mopl.auth.filter;
 
 import com.mopl.auth.dto.AuthUser;
 import com.mopl.auth.jwt.AuthCookies;
-import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.core.common.enums.UserRole;
 import io.jsonwebtoken.Claims;
@@ -60,7 +60,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private void authenticate(String token) {
-        Claims claims = jwtTokenProvider.parseClaims(token);
+        Claims claims = jwtTokenProvider.parseAccessTokenClaims(token);
         UUID userId = jwtTokenProvider.getUserId(claims);
         Instant issuedAt = jwtTokenProvider.getIssuedAt(claims);
 

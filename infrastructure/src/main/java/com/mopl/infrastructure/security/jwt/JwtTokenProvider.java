@@ -1,6 +1,7 @@
-package com.mopl.auth.jwt;
+package com.mopl.infrastructure.security.jwt;
 
 import com.mopl.core.common.enums.UserRole;
+
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -9,7 +10,6 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.UUID;
 import javax.crypto.SecretKey;
-import org.springframework.stereotype.Component;
 
 /**
  * JWT 발급 / 파싱 담당.
@@ -19,7 +19,6 @@ import org.springframework.stereotype.Component;
  *   runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
  *   runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
  */
-@Component
 public class JwtTokenProvider {
 
     private static final String CLAIM_EMAIL = "email";
@@ -73,6 +72,19 @@ public class JwtTokenProvider {
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+    }
+
+    public Claims parseAccessTokenClaims(String token) {
+        Claims claims = parseClaims(token);
+
+        String email = getEmail(claims);
+        UserRole role = getRole(claims);
+
+        if (email == null || email.isBlank() || role == null) {
+            throw new JwtException("Access token is required");
+        }
+
+        return claims;
     }
 
     public boolean isValid(String token) {

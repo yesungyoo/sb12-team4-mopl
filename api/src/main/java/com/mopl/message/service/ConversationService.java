@@ -48,8 +48,10 @@ public class ConversationService {
 			throw new ConversationSelfNotAllowedException();
 		}
 
-		User user1 = requester.getId().compareTo(target.getId()) < 0 ? requester : target;
-		User user2 = requester.getId().compareTo(target.getId()) < 0 ? target : requester;
+		boolean requesterFirst = comesBefore(requester.getId(), target.getId());
+
+		User user1 = requesterFirst ? requester : target;
+		User user2 = requesterFirst ? target : requester;
 
 		return conversationRepository.findByUser1_IdAndUser2_Id(user1.getId(), user2.getId())
 			.orElseGet(() -> conversationRepository.save(new Conversation(user1, user2)));
@@ -65,8 +67,10 @@ public class ConversationService {
 	}
 
 	public ConversationResponse getConversationWith(UUID requesterId, UUID targetUserId) {
-		UUID smallerId = requesterId.compareTo(targetUserId) < 0 ? requesterId : targetUserId;
-		UUID largerId = requesterId.compareTo(targetUserId) < 0 ? targetUserId : requesterId;
+		boolean requesterFirst = comesBefore(requesterId, targetUserId);
+
+		UUID smallerId = requesterFirst ? requesterId : targetUserId;
+		UUID largerId = requesterFirst ? targetUserId : requesterId;
 
 		Conversation conversation = conversationRepository.findByUser1_IdAndUser2_Id(smallerId, largerId)
 			.orElseThrow(ConversationNotFoundException::new);
@@ -166,5 +170,9 @@ public class ConversationService {
 			.existsByConversation_IdAndReceiver_IdAndReadAtIsNull(conversation.getId(), requesterId);
 
 		return ConversationResponse.from(conversation, lastMessage, requesterId, hasUnread);
+	}
+
+	private static boolean comesBefore(UUID first, UUID second) {
+		return first.toString().compareTo(second.toString()) < 0;
 	}
 }

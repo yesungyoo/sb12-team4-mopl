@@ -1,4 +1,4 @@
-package com.mopl.auth.jwt;
+package com.mopl.infrastructure.security.jwt;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

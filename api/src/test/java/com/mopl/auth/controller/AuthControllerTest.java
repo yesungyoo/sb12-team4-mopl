@@ -17,7 +17,7 @@ import com.mopl.auth.handler.LoginSuccessHandler;
 import com.mopl.auth.handler.LogoutSuccessHandlerImpl;
 import com.mopl.auth.jwt.AuthCookieWriter;
 import com.mopl.auth.jwt.AuthCookies;
-import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.mail.LoggingTempPasswordMailSender;
 import com.mopl.auth.provider.EmailPasswordAuthenticationProvider;
 import com.mopl.auth.redis.TokenRedisService;

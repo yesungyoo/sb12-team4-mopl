@@ -60,8 +60,8 @@ class ConversationServiceTest {
 
 		UUID idA = UUID.randomUUID();
 		UUID idB = UUID.randomUUID();
-		smallerId = idA.compareTo(idB) < 0 ? idA : idB;
-		largerId = idA.compareTo(idB) < 0 ? idB : idA;
+		smallerId = idA.toString().compareTo(idB.toString()) < 0 ? idA : idB;
+		largerId = idA.toString().compareTo(idB.toString()) < 0 ? idB : idA;
 
 		smallerUser = mock(User.class);
 		lenient().when(smallerUser.getId()).thenReturn(smallerId);

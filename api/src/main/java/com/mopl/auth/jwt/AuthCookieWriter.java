@@ -5,6 +5,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
 
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
+
 /**
  * 로그인 성공 시(LoginSuccessHandler)와 토큰 재발급 시(AuthController.refresh) 둘 다
  * 동일한 방식으로 쿠키를 세팅해야 해서 공통 컴포넌트로 분리.

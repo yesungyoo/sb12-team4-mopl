@@ -197,8 +197,13 @@ class ConversationRepositoryImplTest {
 	}
 
 	private Conversation persistConversation(User requester, User target) {
-		User user1 = requester.getId().compareTo(target.getId()) < 0 ? requester : target;
-		User user2 = requester.getId().compareTo(target.getId()) < 0 ? target : requester;
+		User user1 = requester.getId().toString().compareTo(target.getId().toString()) < 0
+			? requester
+			: target;
+
+		User user2 = requester.getId().toString().compareTo(target.getId().toString()) < 0
+			? target
+			: requester;
 		Conversation conversation = new Conversation(user1, user2);
 		return em.persistAndFlush(conversation);
 	}

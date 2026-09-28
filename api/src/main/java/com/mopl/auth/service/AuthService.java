@@ -1,6 +1,6 @@
 package com.mopl.auth.service;
 
-import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.mail.TempPasswordMailSender;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.common.exception.MoplException;

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.auth.dto.AuthResponse;
 import com.mopl.auth.dto.AuthUser;
 import com.mopl.auth.jwt.AuthCookieWriter;
-import com.mopl.auth.jwt.JwtTokenProvider;
+import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.redis.TokenRedisService;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.user.dto.UserResponse;
