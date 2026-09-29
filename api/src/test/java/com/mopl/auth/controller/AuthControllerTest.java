@@ -15,6 +15,7 @@ import com.mopl.auth.config.SecurityConfig;
 import com.mopl.auth.handler.LoginFailureHandler;
 import com.mopl.auth.handler.LoginSuccessHandler;
 import com.mopl.auth.handler.LogoutSuccessHandlerImpl;
+import com.mopl.auth.handler.OAuth2LoginHandler;
 import com.mopl.auth.jwt.AuthCookieWriter;
 import com.mopl.auth.jwt.AuthCookies;
 import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
@@ -39,6 +40,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+
 
 /**
  * 이번 PR 에서 새로 만든 인증 핵심 흐름(EmailPasswordAuthenticationProvider, 로그인 성공/실패 핸들러,
@@ -76,6 +78,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private TokenRedisService tokenRedisService;
+
+    @MockitoBean
+    private OAuth2LoginHandler oAuth2LoginHandler;
 
     private UUID userId;
     private User activeUser;

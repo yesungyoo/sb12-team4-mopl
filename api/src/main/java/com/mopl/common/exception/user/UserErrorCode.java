@@ -63,6 +63,17 @@ public enum UserErrorCode implements ErrorCode {
             HttpStatus.BAD_REQUEST,
             "USER_011",
             "지원하지 않는 이미지 파일입니다."
+    ),
+
+    SOCIAL_EMAIL_ALREADY_REGISTERED(
+            HttpStatus.CONFLICT,
+            "USER_012",
+            "이미 이메일로 가입된 계정입니다. 이메일 로그인을 이용해주세요."
+    ),
+    SOCIAL_EMAIL_NOT_VERIFIED(
+            HttpStatus.BAD_REQUEST,
+            "USER_013",
+            "이메일 인증이 확인되지 않은 소셜 계정입니다."
     );
 
     private final HttpStatus status;

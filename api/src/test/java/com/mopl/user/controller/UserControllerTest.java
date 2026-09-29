@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.auth.config.SecurityConfig;
 import com.mopl.auth.handler.LoginFailureHandler;
 import com.mopl.auth.handler.LoginSuccessHandler;
+import com.mopl.auth.handler.OAuth2LoginHandler;
 import com.mopl.auth.handler.LogoutSuccessHandlerImpl;
 import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.provider.EmailPasswordAuthenticationProvider;
@@ -70,6 +71,9 @@ class UserControllerTest {
 
     @MockitoBean
     private LogoutSuccessHandlerImpl logoutSuccessHandler;
+
+    @MockitoBean
+    private OAuth2LoginHandler oAuth2LoginHandler;
 
     @Test
     @DisplayName("CSRF 토큰 없이 회원가입을 요청하면 403을 반환한다")

@@ -59,4 +59,7 @@ dependencies {
     // S3 (이미지 업로드) - 버킷/자격증명 설정 없으면 NoOpImageUploader 가 대신 동작
     implementation platform('software.amazon.awssdk:bom:2.29.22')
     implementation 'software.amazon.awssdk:s3'
+
+    // OAuth2 소셜 로그인 (구글)
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
 }
