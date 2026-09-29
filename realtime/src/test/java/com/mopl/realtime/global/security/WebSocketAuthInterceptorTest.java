@@ -8,12 +8,13 @@ import static org.mockito.Mockito.when;
 
 import com.mopl.core.common.enums.UserRole;
 import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
-import com.mopl.realtime.directmessage.repository.ConversationRepository;
 import com.mopl.infrastructure.security.token.AccessTokenInvalidationService;
-import io.jsonwebtoken.JwtException;
+import com.mopl.realtime.directmessage.repository.ConversationRepository;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import java.time.Instant;
 import java.util.UUID;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -98,7 +99,7 @@ class WebSocketAuthInterceptorTest {
 				.isInstanceOf(StompPrincipal.class);
 
 			StompPrincipal principal =
-				(StompPrincipal) accessor.getUser();
+				(StompPrincipal)accessor.getUser();
 
 			assertThat(principal.userId()).isEqualTo(userId);
 			assertThat(principal.email()).isEqualTo("user@test.com");
@@ -193,6 +194,35 @@ class WebSocketAuthInterceptorTest {
 
 			assertThat(accessor.getUser()).isNull();
 			verifyNoInteractions(accessTokenInvalidationService);
+		}
+
+		@Test
+		@DisplayName("유효하지 않은 Access Token이면 연결을 거부한다")
+		void invalidAccessToken_throws() {
+			when(jwtTokenProvider.parseAccessTokenClaims("invalid-token"))
+				.thenThrow(new JwtException("Invalid access token"));
+
+			StompHeaderAccessor accessor =
+				StompHeaderAccessor.create(StompCommand.CONNECT);
+
+			accessor.setNativeHeader(
+				"Authorization",
+				"Bearer invalid-token"
+			);
+			accessor.setLeaveMutable(true);
+
+			Message<byte[]> message = MessageBuilder.createMessage(
+				new byte[0],
+				accessor.getMessageHeaders()
+			);
+
+			assertThatThrownBy(() ->
+				interceptor.preSend(message, messageChannel)
+			)
+				.isInstanceOf(JwtException.class)
+				.hasMessage("Invalid access token");
+
+			assertThat(accessor.getUser()).isNull();
 		}
 	}
 
