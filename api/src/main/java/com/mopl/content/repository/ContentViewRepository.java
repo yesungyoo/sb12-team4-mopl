@@ -3,6 +3,7 @@ package com.mopl.content.repository;
 import com.mopl.core.domain.content.entity.ContentView;
 import com.mopl.core.domain.content.id.ContentViewId;
 import com.mopl.content.repository.projection.ContentViewStatisticsProjection;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -28,4 +29,15 @@ public interface ContentViewRepository extends JpaRepository<ContentView, Conten
     List<ContentViewStatisticsProjection> findStatisticsByContentIds(
             @Param("contentIds") Collection<UUID> contentIds
     );
+
+    @Query("""
+            select cv
+            from ContentView cv
+            join fetch cv.content c
+            where cv.user.id = :userId
+                and c.deletedAt is null
+            order by cv.lastViewedAt desc
+            """)
+    List<ContentView> findRecentByUserId(@Param("userId") UUID userId,
+                                         Pageable pageable);
 }

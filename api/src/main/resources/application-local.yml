@@ -42,3 +42,8 @@ jwt:
   secret: local-dev-secret-key-please-change-this-in-real-env-1234567890
   access-token-expiration-seconds: 1800
   refresh-token-expiration-seconds: 1209600
+
+recommendation:
+  candidate-size: ${RECOMMENDATION_CANDIDATE_SIZE:30}
+  result-size: ${RECOMMENDATION_RESULT_SIZE:10}
+  cache-ttl: ${RECOMMENDATION_CACHE_TTL:6h}

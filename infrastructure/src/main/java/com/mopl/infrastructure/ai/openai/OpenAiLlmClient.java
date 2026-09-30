@@ -1,5 +1,6 @@
 package com.mopl.infrastructure.ai.openai;
 
+import java.util.Locale;
 import java.util.Objects;
 
 import lombok.RequiredArgsConstructor;
@@ -28,11 +29,26 @@ public class OpenAiLlmClient implements LlmClient {
     public LlmResponse generate(LlmRequest request) {
         OpenAiClientValidator.validateApiKey(aiProperties.apiKey());
 
+        // 기능별 maxOutputTokens가 있으면 우선 사용
+        int maxOutputTokens = request.maxOutputTokens() == null
+                ? DEFAULT_MAX_OUTPUT_TOKENS
+                : request.maxOutputTokens();
+
+        // 기능별 reasoning effort
+        OpenAiLlmRequest.Reasoning reasoning = request.reasoningEffort() == null
+                ? null
+                :new OpenAiLlmRequest.Reasoning(
+                        request.reasoningEffort()
+                                .name()
+                                .toLowerCase(Locale.ROOT)
+        );
+
         OpenAiLlmRequest openAiRequest = new OpenAiLlmRequest(
                 aiProperties.llmModel(),
                 request.systemPrompt(),
                 request.userPrompt(),
-                DEFAULT_MAX_OUTPUT_TOKENS
+                reasoning,
+                maxOutputTokens
         );
 
         try {
@@ -61,6 +77,23 @@ public class OpenAiLlmClient implements LlmClient {
             throw new AiClientException(
                     "OpenAI LLM 응답이 비어 있습니다."
             );
+        }
+
+        // 잘린 응답을 정상 텍스트로 넘기지 않는다.
+        if (!"completed".equals(response.status())) {
+            String reason = response.incompleteDetails() == null
+                    ? "unknown"
+                    : response.incompleteDetails().reason();
+
+            throw new AiClientException(
+                    "OpenAI LLM 응답이 완료되지 않았습니다. "
+                    + "status=" + response.status()
+                    + ", reason=" + reason
+            );
+        }
+
+        if (response.output() == null) {
+            throw new AiClientException("OpenAI LLM 응답이 비어 있습니다.");
         }
 
         return response.output().stream()

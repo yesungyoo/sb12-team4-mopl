@@ -9,6 +9,7 @@ import com.mopl.common.exception.user.UserErrorCode;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.event.ContentSearchStatisticsSyncEvent;
 import com.mopl.core.common.event.FollowingReviewCreatedEvent;
+import com.mopl.core.common.event.RecommendationPreferenceChangedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.review.entity.Review;
 import com.mopl.core.domain.user.entity.User;
@@ -87,6 +88,8 @@ public class ReviewService {
 
         publishContentSearchStatisticsSyncEvent(contentId);
 
+        publishRecommendationPreferenceChangedEvent(userId);
+
         return ReviewResponse.from(savedReview);
     }
 
@@ -107,6 +110,8 @@ public class ReviewService {
                 review.getContent().getId()
         );
 
+        publishRecommendationPreferenceChangedEvent(userId);
+
         return ReviewResponse.from(review);
     }
 
@@ -123,6 +128,8 @@ public class ReviewService {
         reviewRepository.delete(review);
 
         publishContentSearchStatisticsSyncEvent(contentId);
+
+        publishRecommendationPreferenceChangedEvent(userId);
     }
 
     private User findActiveUser(UUID userId) {
@@ -154,6 +161,12 @@ public class ReviewService {
     private void publishContentSearchStatisticsSyncEvent(UUID contentId) {
         eventPublisher.publishEvent(
                 new ContentSearchStatisticsSyncEvent(contentId)
+        );
+    }
+
+    private void publishRecommendationPreferenceChangedEvent(UUID userId) {
+        eventPublisher.publishEvent(
+                new RecommendationPreferenceChangedEvent(userId)
         );
     }
 }

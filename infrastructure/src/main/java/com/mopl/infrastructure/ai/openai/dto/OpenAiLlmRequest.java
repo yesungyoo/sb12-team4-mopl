@@ -6,8 +6,13 @@ public record OpenAiLlmRequest(
         String model,
         String instructions,
         String input,
+        Reasoning reasoning,
 
         @JsonProperty("max_output_tokens")
         Integer maxOutputTokens
 ) {
+
+        public record Reasoning(
+                String effort
+        ) {}
 }

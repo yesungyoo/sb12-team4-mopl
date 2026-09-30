@@ -1,27 +1,29 @@
 package com.mopl.content.search.service;
 
-import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.repository.ContentTagRepository;
-import com.mopl.content.repository.ContentViewRepository;
-import com.mopl.content.search.document.ContentSearchDocument;
-import com.mopl.content.search.repository.ContentSearchRepository;
-import com.mopl.core.domain.content.entity.Content;
-import com.mopl.core.domain.content.entity.ContentTag;
-import com.mopl.review.repository.ReviewRepository;
-import com.mopl.review.repository.projection.ContentReviewStatisticsProjection;
-import com.mopl.content.repository.projection.ContentViewStatisticsProjection;
-import lombok.RequiredArgsConstructor;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.repository.ContentTagRepository;
+import com.mopl.content.repository.ContentViewRepository;
+import com.mopl.content.repository.projection.ContentViewStatisticsProjection;
+import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.core.domain.content.entity.Content;
+import com.mopl.core.domain.content.entity.ContentTag;
+import com.mopl.review.repository.ReviewRepository;
+import com.mopl.review.repository.projection.ContentReviewStatisticsProjection;
+
+import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
@@ -64,31 +66,18 @@ public class ContentSearchIndexer {
             Map<UUID, Long> watcherCountByContentId = findWatcherCountByContentId(contents);
 
             List<ContentSearchDocument> documents = contents.stream()
-                    .map(content -> {
-                        ContentReviewStatisticsProjection reviewStatistics =
-                                reviewStatisticsByContentId.get(content.getId());
-
-                        Double averageRating = reviewStatistics == null
-                                ? 0.0
-                                : reviewStatistics.getAverageRating();
-
-                        long reviewCount = reviewStatistics == null
-                                ? 0L
-                                : reviewStatistics.getReviewCount();
-
-                        long watcherCount = watcherCountByContentId.getOrDefault(
-                                content.getId(),
-                                0L
-                        );
-
-                        return createDocument(
-                                content,
-                                tagsByContentId.getOrDefault(content.getId(), List.of()),
-                                averageRating,
-                                reviewCount,
-                                watcherCount
-                        );
-                    })
+                    .map(content -> createDocument(
+                            content,
+                            tagsByContentId.getOrDefault(
+                                    content.getId(),
+                                    List.of()
+                            ),
+                            createStatistics(
+                                    content.getId(),
+                                    reviewStatisticsByContentId,
+                                    watcherCountByContentId
+                            )
+                    ))
                     .toList();
 
             if (!documents.isEmpty()) {
@@ -111,9 +100,7 @@ public class ContentSearchIndexer {
         ContentSearchDocument document = createDocument(
                 content,
                 contentTags,
-                statistics.averageRating(),
-                statistics.reviewCount(),
-                statistics.watcherCount()
+                statistics
         );
 
         contentSearchRepository.save(document);
@@ -191,6 +178,30 @@ public class ContentSearchIndexer {
                 ));
     }
 
+    private SearchStatistics createStatistics(
+            UUID contentId,
+            Map<UUID, ContentReviewStatisticsProjection> reviewStatisticsByContentId,
+            Map<UUID, Long> watcherCountByContentId
+    ) {
+        ContentReviewStatisticsProjection reviewStatistics = reviewStatisticsByContentId.get(contentId);
+
+        Double averageRating = reviewStatistics == null
+                ? null
+                : reviewStatistics.getAverageRating();
+
+        long reviewCount = reviewStatistics == null
+                ? 0L
+                : reviewStatistics.getReviewCount();
+
+        long watcherCount = watcherCountByContentId.getOrDefault(contentId, 0L);
+
+        return new SearchStatistics(
+                averageRating,
+                reviewCount,
+                watcherCount
+        );
+    }
+
     private SearchStatistics findStatistics(UUID contentId) {
         Double averageRating = reviewRepository
                 .findAverageRatingByContentId(contentId);
@@ -209,9 +220,7 @@ public class ContentSearchIndexer {
     private ContentSearchDocument createDocument(
             Content content,
             List<ContentTag> contentTags,
-            Double averageRating,
-            long reviewCount,
-            long watcherCount
+            SearchStatistics statistics
     ) {
         List<Double> embedding = contentEmbeddingService.embedContent(content, contentTags);
 
@@ -219,9 +228,9 @@ public class ContentSearchIndexer {
                 content,
                 contentTags,
                 embedding,
-                averageRating,
-                reviewCount,
-                watcherCount
+                statistics.averageRating(),
+                statistics.reviewCount(),
+                statistics.watcherCount()
         );
     }
 

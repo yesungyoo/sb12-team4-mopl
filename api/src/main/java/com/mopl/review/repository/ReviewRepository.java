@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -49,4 +50,18 @@ public interface ReviewRepository extends JpaRepository<Review, UUID> {
     List<ContentReviewStatisticsProjection> findStatisticsByContentIds(
             @Param("contentIds") Collection<UUID> contentIds
     );
+
+    // 개인화 추천용 고평점 리뷰 조회
+    @Query("""
+            select r
+            from Review r
+            join fetch r.content c
+            where r.user.id = :userId
+                and c.deletedAt is null
+                and r.rating >= :minRating
+            order by r.rating desc, r.updatedAt desc
+            """)
+    List<Review> findHighRatedByUserId(@Param("userId") UUID userId,
+                                       @Param("minRating") BigDecimal minRating,
+                                       Pageable pageable);
 }
