@@ -70,8 +70,8 @@ public class SecurityConfig {
                 .authenticationProvider(emailPasswordAuthenticationProvider)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/sign-in", "/api/auth/refresh", "/api/auth/csrf-token", "/api/auth/reset-password").permitAll()
-                        // 소셜 로그인 시작(/oauth2/authorization/**) 과 구글이 돌아오는 콜백(/login/oauth2/code/**)
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
+                        .requestMatchers("/actuator/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users").permitAll() // 회원가입
                         .anyRequest().authenticated()
                 )
