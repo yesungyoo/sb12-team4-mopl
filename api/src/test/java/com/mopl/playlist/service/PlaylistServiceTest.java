@@ -13,6 +13,7 @@ import com.mopl.playlist.dto.PlaylistUpdateRequest;
 import com.mopl.playlist.repository.PlaylistContentRepository;
 import com.mopl.playlist.repository.PlaylistRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,6 +63,9 @@ class PlaylistServiceTest {
 	@Mock
 	private PlaylistSubscriptionRepository playlistSubscriptionRepository;
 
+	@Mock
+	private Validator validator;
+
 	private PlaylistService playlistService;
 
 	private UUID ownerId;
@@ -70,8 +75,14 @@ class PlaylistServiceTest {
 
 	@BeforeEach
 	void setUp() {
-		playlistService = new PlaylistService(playlistRepository, entityManager, playlistContentRepository, contentRepository, playlistSubscriptionRepository);
-
+		playlistService = new PlaylistService(
+			playlistRepository,
+			entityManager,
+			playlistContentRepository,
+			contentRepository,
+			playlistSubscriptionRepository,
+			validator
+		);
 		ownerId = UUID.randomUUID();
 		owner = mock(User.class);
 		lenient().when(owner.getId()).thenReturn(ownerId);
@@ -85,6 +96,9 @@ class PlaylistServiceTest {
 		lenient().when(playlist.getTitle()).thenReturn("기존 제목");
 		lenient().when(playlist.getDescription()).thenReturn("기존 설명");
 		lenient().when(playlist.getUpdatedAt()).thenReturn(LocalDateTime.now());
+
+		lenient().when(validator.validate(any()))
+			.thenReturn(Set.of());
 	}
 
 	@Nested

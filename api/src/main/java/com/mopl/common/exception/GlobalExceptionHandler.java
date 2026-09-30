@@ -8,6 +8,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.http.HttpHeaders;
 
 import java.util.stream.Collectors;
 
@@ -24,9 +25,17 @@ public class GlobalExceptionHandler {
                 exception.getMessage()
         );
 
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(response);
+		ResponseEntity.BodyBuilder builder =
+			ResponseEntity.status(errorCode.getStatus());
+
+		if (exception instanceof RetryAfterProvider retryAfterProvider) {
+			builder.header(
+				HttpHeaders.RETRY_AFTER,
+				String.valueOf(retryAfterProvider.getRetryAfterSeconds())
+			);
+		}
+
+		return builder.body(response);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

@@ -7,6 +7,7 @@ import com.mopl.common.exception.playlist.PlaylistAccessDeniedException;
 import com.mopl.common.exception.playlist.PlaylistContentAlreadyExistsException;
 import com.mopl.common.exception.playlist.PlaylistContentNotFoundException;
 import com.mopl.common.exception.playlist.PlaylistNotFoundException;
+import com.mopl.common.exception.user.UserErrorCode;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.playlist.entity.Playlist;
@@ -19,6 +20,9 @@ import com.mopl.playlist.repository.PlaylistRepository;
 import com.mopl.playlist.repository.PlaylistSubscriptionRepository;
 
 import jakarta.persistence.EntityManager;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
+
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +45,8 @@ public class PlaylistService {
 	private final ContentRepository contentRepository;
 	private final PlaylistSubscriptionRepository playlistSubscriptionRepository;
 
+	private final Validator validator;
+
 	private List<Content> getContentsOf(UUID playlistId) {
 		return playlistContentRepository.findAllByPlaylistId(playlistId).stream()
 			.map(PlaylistContent::getContent)
@@ -52,13 +58,15 @@ public class PlaylistService {
 		EntityManager entityManager,
 		PlaylistContentRepository playlistContentRepository,
 		ContentRepository contentRepository,
-		PlaylistSubscriptionRepository playlistSubscriptionRepository
+		PlaylistSubscriptionRepository playlistSubscriptionRepository,
+		Validator validator
 	) {
 		this.playlistRepository = playlistRepository;
 		this.entityManager = entityManager;
 		this.playlistContentRepository = playlistContentRepository;
 		this.contentRepository = contentRepository;
 		this.playlistSubscriptionRepository = playlistSubscriptionRepository;
+		this.validator = validator;
 	}
 
 	public PlaylistResponse getPlaylist(UUID playlistId, UUID currentUserId) {
@@ -145,16 +153,47 @@ public class PlaylistService {
 		UUID currentUserId,
 		PlaylistCreateRequest request
 	) {
+		Set<ConstraintViolation<PlaylistCreateRequest>> violations =
+			validator.validate(request);
+
+		if (!violations.isEmpty()) {
+			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+		}
+
 		User owner = entityManager.find(User.class, currentUserId);
 		if (owner == null) {
-			// TODO: User 도메인 예외 체계(UserErrorCode.USER_NOT_FOUND 등) 생기면 교체 예정
-			throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
+			throw new MoplException(UserErrorCode.USER_NOT_FOUND);
 		}
 
 		Playlist playlist = new Playlist(owner, request.title(), request.description());
 		Playlist saved = playlistRepository.save(playlist);
 
 		return PlaylistResponse.from(saved);
+	}
+
+	@Transactional
+	public PlaylistResponse createPlaylistWithContents(
+		UUID currentUserId,
+		PlaylistCreateRequest request,
+		List<UUID> contentIds
+	) {
+		PlaylistResponse playlist = createPlaylist(
+			currentUserId,
+			request
+		);
+
+		for (UUID contentId : contentIds) {
+			addContentToPlaylist(
+				currentUserId,
+				playlist.id(),
+				contentId
+			);
+		}
+
+		return getPlaylist(
+			playlist.id(),
+			currentUserId
+		);
 	}
 
 	@Transactional

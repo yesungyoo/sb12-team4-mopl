@@ -45,6 +45,10 @@ public class PlaylistAiSession extends BaseUpdatableEntity {
         this.title = title;
     }
 
+	public void updateTitle(String title) {
+		this.title = title;
+	}
+
     public UUID getId() {
         return id;
     }

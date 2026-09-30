@@ -10,6 +10,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // Spring AI
+    implementation platform('org.springframework.ai:spring-ai-bom:1.1.8')
+    implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+
     // 테스트 전용
     testRuntimeOnly 'com.h2database:h2'
 
@@ -54,6 +58,7 @@ dependencies {
 
     test {
         environment "JWT_SECRET", "test-only-secret-key-never-use-in-production-1234567890"
+        systemProperty "spring.ai.openai.api-key", "test-api-key"
     }
 
     // S3 (이미지 업로드) - 버킷/자격증명 설정 없으면 NoOpImageUploader 가 대신 동작
