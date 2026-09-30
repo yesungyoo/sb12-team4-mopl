@@ -1,0 +1,312 @@
+@import 'tailwindcss';
+@import 'pretendard/dist/web/variable/pretendardvariable.css';
+
+/* Design System Colors - Figma Tokens */
+@theme {
+  /* Base Colors */
+  --color-background: #010102;
+  --color-white: #ffffff;
+
+  /* Gray Scale (11 steps) */
+  --color-gray-50: #fafafa;
+  --color-gray-100: #f2f2f3;
+  --color-gray-200: #dfdfe2;
+  --color-gray-300: #ccccd6;
+  --color-gray-400: #aaaab1;
+  --color-gray-500: #828291;
+  --color-gray-600: #676777;
+  --color-gray-700: #565666;
+  --color-gray-800: #34343d;
+  --color-gray-900: #212126;
+  --color-gray-950: #131316;
+
+  /* Pink (Brand) Scale (11 steps) */
+  --color-pink-50: #ffe9ec;
+  --color-pink-100: #ffd0d6;
+  --color-pink-200: #ffb5be;
+  --color-pink-300: #ff8c9d;
+  --color-pink-400: #ff687e;
+  --color-pink-500: #ff4a64;
+  --color-pink-600: #e5435a;
+  --color-pink-700: #cc3c50;
+  --color-pink-800: #b13446;
+  --color-pink-900: #8d2b3a;
+  --color-pink-950: #5e1c25;
+
+  /* Semantic Colors */
+  --color-red-notification: #ce0045;
+}
+
+:root {
+  font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* shadcn/ui Semantic Color Variables */
+  --background: 0 0% 100%;
+  --foreground: 220 5% 8%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 220 5% 8%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 5% 8%;
+
+  --primary: 348 100% 64%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 4% 93%;
+  --secondary-foreground: 220 5% 8%;
+
+  --muted: 220 4% 93%;
+  --muted-foreground: 220 2% 51%;
+
+  --accent: 220 4% 93%;
+  --accent-foreground: 220 5% 8%;
+
+  --destructive: 340 100% 40%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 220 6% 87%;
+  --input: 220 6% 87%;
+  --ring: 348 100% 64%;
+
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 220 5% 8%;
+  --foreground: 220 4% 93%;
+
+  --card: 220 5% 8%;
+  --card-foreground: 220 4% 93%;
+
+  --popover: 220 5% 8%;
+  --popover-foreground: 220 4% 93%;
+
+  --primary: 348 100% 64%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 5% 13%;
+  --secondary-foreground: 220 4% 93%;
+
+  --muted: 220 5% 13%;
+  --muted-foreground: 220 2% 51%;
+
+  --accent: 220 5% 13%;
+  --accent-foreground: 220 4% 93%;
+
+  --destructive: 340 100% 40%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 220 5% 21%;
+  --input: 220 5% 21%;
+  --ring: 348 100% 64%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* Typography System - 24 styles based on Figma design */
+@layer utilities {
+  /* Header Styles (4) */
+  .text-header1-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1.5rem; /* 24px */
+    line-height: 1;
+    letter-spacing: -0.03rem; /* -0.48px */
+  }
+
+  .text-header1-b-160 {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1.5rem; /* 24px */
+    line-height: 1.6;
+    letter-spacing: -0.03rem; /* -0.48px */
+  }
+
+  .text-header1-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 1.5rem; /* 24px */
+    line-height: 1;
+    letter-spacing: -0.03rem; /* -0.48px */
+  }
+
+  .text-header2-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 800;
+    font-size: 1.375rem; /* 22px */
+    line-height: 1.4;
+    letter-spacing: -0.0275rem; /* -0.44px */
+  }
+
+  /* Title Styles (3) */
+  .text-title1-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1.25rem; /* 20px */
+    line-height: 1;
+    letter-spacing: -0.025rem; /* -0.4px */
+  }
+
+  .text-title1-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 1.25rem; /* 20px */
+    line-height: 1;
+    letter-spacing: -0.025rem; /* -0.4px */
+  }
+
+  .text-title1-b-140 {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1.25rem; /* 20px */
+    line-height: 1.4;
+    letter-spacing: -0.025rem; /* -0.4px */
+  }
+
+  /* Body Styles (13) */
+  .text-body1-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1.125rem; /* 18px */
+    line-height: 1;
+    letter-spacing: -0.0225rem; /* -0.36px */
+  }
+
+  .text-body1-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 1.125rem; /* 18px */
+    line-height: 1;
+    letter-spacing: -0.0225rem; /* -0.36px */
+  }
+
+  .text-body1-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 1.125rem; /* 18px */
+    line-height: 1;
+    letter-spacing: -0.0225rem; /* -0.36px */
+  }
+
+  .text-body2-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 1rem; /* 16px */
+    line-height: 1;
+    letter-spacing: -0.02rem; /* -0.32px */
+  }
+
+  .text-body2-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 1rem; /* 16px */
+    line-height: 1;
+    letter-spacing: -0.02rem; /* -0.32px */
+  }
+
+  .text-body2-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 1rem; /* 16px */
+    line-height: 1;
+    letter-spacing: -0.02rem; /* -0.32px */
+  }
+
+  .text-body2-m-140 {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 1rem; /* 16px */
+    line-height: 1.4;
+    letter-spacing: -0.02rem; /* -0.32px */
+  }
+
+  .text-body2-m-160 {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 1rem; /* 16px */
+    line-height: 1.6;
+    letter-spacing: -0.02rem; /* -0.32px */
+  }
+
+  .text-body3-b {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 700;
+    font-size: 0.875rem; /* 14px */
+    line-height: 1;
+    letter-spacing: -0.0175rem; /* -0.28px */
+  }
+
+  .text-body3-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 0.875rem; /* 14px */
+    line-height: 1;
+    letter-spacing: -0.0175rem; /* -0.28px */
+  }
+
+  .text-body3-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 0.875rem; /* 14px */
+    line-height: 1;
+    letter-spacing: -0.0175rem; /* -0.28px */
+  }
+
+  .text-body3-m-150 {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 0.875rem; /* 14px */
+    line-height: 1.5;
+    letter-spacing: -0.0175rem; /* -0.28px */
+  }
+
+  .text-body4-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 0.8125rem; /* 13px */
+    line-height: 1;
+    letter-spacing: -0.01625rem; /* -0.26px */
+  }
+
+  /* Caption Styles (4) */
+  .text-caption1-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 0.75rem; /* 12px */
+    line-height: 1;
+    letter-spacing: -0.015rem; /* -0.24px */
+  }
+
+  .text-caption1-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 0.75rem; /* 12px */
+    line-height: 1;
+    letter-spacing: -0.015rem; /* -0.24px */
+  }
+
+  .text-caption2-sb {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 600;
+    font-size: 0.6875rem; /* 11px */
+    line-height: 1;
+    letter-spacing: -0.01375rem; /* -0.22px */
+  }
+
+  .text-caption2-m {
+    font-family: 'Pretendard Variable', Pretendard, sans-serif;
+    font-weight: 500;
+    font-size: 0.6875rem; /* 11px */
+    line-height: 1;
+    letter-spacing: -0.01375rem; /* -0.22px */
+  }
+}
