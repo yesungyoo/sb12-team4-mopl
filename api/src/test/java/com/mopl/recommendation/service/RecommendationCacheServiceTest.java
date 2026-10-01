@@ -28,6 +28,10 @@ import com.mopl.recommendation.dto.RecommendationItem;
 @ExtendWith(MockitoExtension.class)
 class RecommendationCacheServiceTest {
 
+    // [#90 추가]
+    // RecommendationItem 응답 스키마에 thumbnailUrl이 추가되어 캐시 버전을 v2로 변경
+    private static final String CACHE_KEY_VERSION = ":v2";
+
     @Mock
     private StringRedisTemplate redisTemplate;
 
@@ -42,35 +46,26 @@ class RecommendationCacheServiceTest {
 
     @BeforeEach
     void setUp() {
-        objectMapper =
-                new ObjectMapper();
+        objectMapper = new ObjectMapper();
 
-        // [추가]
-        recommendationProperties =
-                new RecommendationProperties(
-                        30,
-                        10,
-                        Duration.ofHours(6)
-                );
+        recommendationProperties = new RecommendationProperties(
+                30,
+                10,
+                Duration.ofHours(6)
+        );
 
-        // [수정]
-        recommendationCacheService =
-                new RecommendationCacheService(
-                        redisTemplate,
-                        objectMapper,
-                        recommendationProperties
-                );
+        recommendationCacheService = new RecommendationCacheService(
+                redisTemplate,
+                objectMapper,
+                recommendationProperties
+        );
     }
 
     @Test
     void returnsEmptyWhenCacheDoesNotExist() {
-        UUID userId =
-                UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
 
-        String expectedKey =
-                "recommendations:"
-                        + userId
-                        + ":v1";
+        String expectedKey = createExpectedKey(userId);
 
         when(redisTemplate.opsForValue())
                 .thenReturn(valueOperations);
@@ -79,35 +74,26 @@ class RecommendationCacheServiceTest {
                 .thenReturn(null);
 
         Optional<List<RecommendationItem>> result =
-                recommendationCacheService.get(
-                        userId
-                );
+                recommendationCacheService.get(userId);
 
-        assertThat(result)
-                .isEmpty();
+        assertThat(result).isEmpty();
 
         verify(valueOperations)
                 .get(expectedKey);
     }
 
     @Test
-    void returnsCachedRecommendations()
-            throws Exception {
-        UUID userId =
-                UUID.randomUUID();
+    void returnsCachedRecommendations() throws Exception {
+        UUID userId = UUID.randomUUID();
 
         RecommendationItem recommendation =
                 createRecommendationItem();
 
-        String expectedKey =
-                "recommendations:"
-                        + userId
-                        + ":v1";
+        String expectedKey = createExpectedKey(userId);
 
-        String cachedValue =
-                objectMapper.writeValueAsString(
-                        List.of(recommendation)
-                );
+        String cachedValue = objectMapper.writeValueAsString(
+                List.of(recommendation)
+        );
 
         when(redisTemplate.opsForValue())
                 .thenReturn(valueOperations);
@@ -116,12 +102,9 @@ class RecommendationCacheServiceTest {
                 .thenReturn(cachedValue);
 
         Optional<List<RecommendationItem>> result =
-                recommendationCacheService.get(
-                        userId
-                );
+                recommendationCacheService.get(userId);
 
-        assertThat(result)
-                .isPresent();
+        assertThat(result).isPresent();
 
         assertThat(result.orElseThrow())
                 .hasSize(1);
@@ -144,18 +127,13 @@ class RecommendationCacheServiceTest {
     }
 
     @Test
-    void savesRecommendationsWithSixHourTtl()
-            throws Exception {
-        UUID userId =
-                UUID.randomUUID();
+    void savesRecommendationsWithSixHourTtl() throws Exception {
+        UUID userId = UUID.randomUUID();
 
         RecommendationItem recommendation =
                 createRecommendationItem();
 
-        String expectedKey =
-                "recommendations:"
-                        + userId
-                        + ":v1";
+        String expectedKey = createExpectedKey(userId);
 
         when(redisTemplate.opsForValue())
                 .thenReturn(valueOperations);
@@ -174,31 +152,33 @@ class RecommendationCacheServiceTest {
     }
 
     @Test
-    void treatsBrokenCacheAsCacheMiss()
-            throws Exception {
-        UUID userId =
-                UUID.randomUUID();
+    void treatsBrokenCacheAsCacheMiss() throws Exception {
+        UUID userId = UUID.randomUUID();
 
-        String expectedKey =
-                "recommendations:"
-                        + userId
-                        + ":v1";
+        String expectedKey = createExpectedKey(userId);
 
         when(redisTemplate.opsForValue())
                 .thenReturn(valueOperations);
 
         when(valueOperations.get(expectedKey))
-                .thenReturn(
-                        "{this-is-not-valid-json"
-                );
+                .thenReturn("{this-is-not-valid-json");
 
         Optional<List<RecommendationItem>> result =
-                recommendationCacheService.get(
-                        userId
-                );
+                recommendationCacheService.get(userId);
 
-        assertThat(result)
-                .isEmpty();
+        assertThat(result).isEmpty();
+
+        verify(redisTemplate)
+                .delete(expectedKey);
+    }
+
+    @Test
+    void evictsRecommendationsForUser() {
+        UUID userId = UUID.randomUUID();
+
+        String expectedKey = createExpectedKey(userId);
+
+        recommendationCacheService.evict(userId);
 
         verify(redisTemplate)
                 .delete(expectedKey);
@@ -223,22 +203,11 @@ class RecommendationCacheServiceTest {
         );
     }
 
-    // [추가]
-    @Test
-    void evictsRecommendationsForUser() {
-        UUID userId =
-                UUID.randomUUID();
-
-        String expectedKey =
-                "recommendations:"
-                        + userId
-                        + ":v1";
-
-        recommendationCacheService.evict(
-                userId
-        );
-
-        verify(redisTemplate)
-                .delete(expectedKey);
+    // [#90 추가]
+    // 테스트에서도 production 코드와 동일한 캐시 키 규칙을 한 곳에서 관리
+    private String createExpectedKey(UUID userId) {
+        return "recommendations:"
+                + userId
+                + CACHE_KEY_VERSION;
     }
 }

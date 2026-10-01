@@ -10,6 +10,7 @@ import java.util.UUID;
 public record ContentCandidate(
         UUID contentId,
         String title,
+        String thumbnailUrl,
         ContentType type,
         List<ContentTagDto> tags,
         double semanticScore,
@@ -17,6 +18,29 @@ public record ContentCandidate(
         Double externalPopularity,
         Long externalVoteCount
 ) {
+
+    public ContentCandidate(
+            UUID contentId,
+            String title,
+            ContentType type,
+            List<ContentTagDto> tags,
+            double semanticScore,
+            Double externalRating,
+            Double externalPopularity,
+            Long externalVoteCount
+    ) {
+        this(
+                contentId,
+                title,
+                null,
+                type,
+                tags,
+                semanticScore,
+                externalRating,
+                externalPopularity,
+                externalVoteCount
+        );
+    }
 
     public static ContentCandidate from(
             Content content,
@@ -32,6 +56,7 @@ public record ContentCandidate(
         return new ContentCandidate(
                 content.getId(),
                 content.getTitle(),
+                content.getThumbnailUrl(),
                 content.getType(),
                 tags,
                 semanticScore,

@@ -10,6 +10,7 @@ import java.util.UUID;
 public record RecommendationItem(
         UUID contentId,
         String title,
+        String thumbnailUrl,
         ContentType type,
         List<ContentTagDto> tags,
         double semanticScore,
@@ -19,6 +20,31 @@ public record RecommendationItem(
         String reason
 ) {
 
+    public RecommendationItem(
+            UUID contentId,
+            String title,
+            ContentType type,
+            List<ContentTagDto> tags,
+            double semanticScore,
+            Double externalRating,
+            Double externalPopularity,
+            Long externalVoteCount,
+            String reason
+    ) {
+        this(
+                contentId,
+                title,
+                null,
+                type,
+                tags,
+                semanticScore,
+                externalRating,
+                externalPopularity,
+                externalVoteCount,
+                reason
+        );
+    }
+
     public static RecommendationItem from(
             ContentCandidate candidate,
             String reason
@@ -26,6 +52,7 @@ public record RecommendationItem(
         return new RecommendationItem(
                 candidate.contentId(),
                 candidate.title(),
+                candidate.thumbnailUrl(),
                 candidate.type(),
                 candidate.tags(),
                 candidate.semanticScore(),

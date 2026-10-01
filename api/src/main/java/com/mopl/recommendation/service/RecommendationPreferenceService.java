@@ -22,6 +22,7 @@ import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.core.domain.content.entity.ContentView;
 import com.mopl.core.domain.review.entity.Review;
 import com.mopl.recommendation.dto.RecommendationPreference;
+import com.mopl.recommendation.dto.RecommendationPreferredTag;
 import com.mopl.review.repository.ReviewRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class RecommendationPreferenceService {
     private static final int MAX_HIGH_RATED_TITLES = 5;
 
     private static final int MAX_PREFERRED_TAGS = 5;
+    private static final int MAX_PREFERRED_TAGS_PER_TYPE = 5;
     private static final long HIGH_RATED_REVIEW_WEIGHT = 2L;
 
     private final ContentViewRepository contentViewRepository;
@@ -73,10 +75,20 @@ public class RecommendationPreferenceService {
                 highRatedReviews
         );
 
-        List<PreferredTag> preferredTags = findPreferredTags(
-                interactedContentIds,
+        List<ContentTag> contentTags = interactedContentIds.isEmpty()
+                ? List.of()
+                : contentTagRepository.findAllByContentIds(interactedContentIds);
+
+        List<RecommendationPreferredTag> preferredTags = findPreferredTags(
+                contentTags,
                 contentPreferenceScores
         );
+
+        Map<ContentType, List<RecommendationPreferredTag>> preferredTagsByType =
+                findPreferredTagsByType(
+                        contentTags,
+                        contentPreferenceScores
+                );
 
         String preferenceText = buildPreferenceText(
                 recentViews,
@@ -86,7 +98,8 @@ public class RecommendationPreferenceService {
 
         return RecommendationPreference.personalized(
                 preferenceText,
-                interactedContentIds
+                interactedContentIds,
+                preferredTagsByType
         );
     }
 
@@ -124,15 +137,13 @@ public class RecommendationPreferenceService {
         return scores;
     }
 
-    private List<PreferredTag> findPreferredTags(
-            Set<UUID> interactedContentIds,
+    private List<RecommendationPreferredTag> findPreferredTags(
+            List<ContentTag> contentTags,
             Map<UUID, Long> contentPreferenceScores
     ) {
-        if (interactedContentIds.isEmpty()) {
+        if (contentTags.isEmpty()) {
             return List.of();
         }
-
-        List<ContentTag> contentTags = contentTagRepository.findAllByContentIds(interactedContentIds);
 
         Map<TagKey, Long> tagScores = new HashMap<>();
 
@@ -160,6 +171,71 @@ public class RecommendationPreferenceService {
             );
         }
 
+        return toPreferredTags(
+                tagScores,
+                MAX_PREFERRED_TAGS
+        );
+    }
+
+    // 콘텐츠 타입별로 태그 점수를 독립적으로 계산
+    private Map<ContentType, List<RecommendationPreferredTag>> findPreferredTagsByType(
+            List<ContentTag> contentTags,
+            Map<UUID, Long> contentPreferenceScores
+    ) {
+        if (contentTags.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<ContentType, Map<TagKey, Long>> tagScoresByType = new EnumMap<>(ContentType.class);
+
+        for (ContentTag contentTag : contentTags) {
+            UUID contentId = contentTag.getContent().getId();
+
+            long contentScore = contentPreferenceScores.getOrDefault(
+                    contentId,
+                    0L
+            );
+
+            if (contentScore <= 0) {
+                continue;
+            }
+
+            ContentType contentType = contentTag.getContent().getType();
+
+            TagKey tagKey = new TagKey(
+                    contentTag.getTag(),
+                    contentTag.getValue()
+            );
+
+            tagScoresByType.computeIfAbsent(
+                    contentType,
+                    ignored -> new HashMap<>()
+            )
+                    .merge(tagKey, contentScore, Long::sum);
+        }
+
+        Map<ContentType, List<RecommendationPreferredTag>> preferredTagsByType =
+                new EnumMap<>(ContentType.class);
+
+        for (Map.Entry<ContentType, Map<TagKey, Long>> entry : tagScoresByType.entrySet()) {
+            List<RecommendationPreferredTag> preferredTags = toPreferredTags(
+                    entry.getValue(),
+                    MAX_PREFERRED_TAGS_PER_TYPE
+            );
+
+            if (preferredTags.isEmpty()) {
+                continue;
+            }
+
+            preferredTagsByType.put(entry.getKey(), preferredTags);
+        }
+        return preferredTagsByType;
+    }
+
+    private List<RecommendationPreferredTag> toPreferredTags(
+            Map<TagKey, Long> tagScores,
+            int limit
+    ) {
         return tagScores.entrySet()
                 .stream()
                 .sorted(Map.Entry
@@ -168,8 +244,8 @@ public class RecommendationPreferenceService {
                         .thenComparing(entry -> entry.getKey().tag())
                         .thenComparing(entry -> entry.getKey().value())
                 )
-                .limit(MAX_PREFERRED_TAGS)
-                .map(entry -> new PreferredTag(
+                .limit(limit)
+                .map(entry -> new RecommendationPreferredTag(
                         entry.getKey().tag(),
                         entry.getKey().value(),
                         entry.getValue()
@@ -199,7 +275,7 @@ public class RecommendationPreferenceService {
     private String buildPreferenceText(
             List<ContentView> recentViews,
             List<Review> highRatedReviews,
-            List<PreferredTag> preferredTags
+            List<RecommendationPreferredTag> preferredTags
     ) {
         StringBuilder builder = new StringBuilder();
 
@@ -297,10 +373,4 @@ public class RecommendationPreferenceService {
     }
 
     private record TagKey(String tag, String value) {}
-
-    private record PreferredTag(
-            String tag,
-            String value,
-            long score
-    ) {}
 }

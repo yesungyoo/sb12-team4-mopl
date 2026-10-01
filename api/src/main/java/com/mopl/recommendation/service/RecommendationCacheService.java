@@ -26,7 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 public class RecommendationCacheService {
 
     private static final String CACHE_KEY_PREFIX = "recommendations:";
-    private static final String CACHE_KEY_VERSION = ":v1";
+    private static final String CACHE_KEY_VERSION = ":v2";
 
     private static final TypeReference<List<RecommendationItem>> RECOMMENDATION_ITEM_LIST_TYPE =
             new TypeReference<>() {};
