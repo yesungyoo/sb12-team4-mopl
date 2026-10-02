@@ -17,6 +17,10 @@ spring:
         type:
           preferred_uuid_jdbc_type: CHAR
 
+  kafka:
+    consumer:
+      group-id: mopl-api-group
+
 server:
   port: ${API_PORT:8080}
 
