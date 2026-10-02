@@ -303,10 +303,19 @@ body {
   }
 
   .text-caption2-m {
-    font-family: 'Pretendard Variable', Pretendard, sans-serif;
-    font-weight: 500;
-    font-size: 0.6875rem; /* 11px */
-    line-height: 1;
-    letter-spacing: -0.01375rem; /* -0.22px */
+      font-family: 'Pretendard Variable', Pretendard, sans-serif;
+      font-weight: 500;
+      font-size: 0.6875rem; /* 11px */
+      line-height: 1;
+      letter-spacing: -0.01375rem; /* -0.22px */
   }
+}
+
+.ai-chat-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.ai-chat-scroll::-webkit-scrollbar {
+    display: none;
 }

@@ -135,6 +135,36 @@ public class ContentSearchService {
         );
     }
 
+	public Map<UUID, ContentSearchDocument> findDocumentsByContentIds(
+		List<UUID> contentIds
+	) {
+		if (contentIds.isEmpty()) {
+			return Map.of();
+		}
+
+		NativeQuery query = NativeQuery.builder()
+			.withQuery(q -> q.ids(ids -> ids
+				.values(contentIds.stream()
+					.map(UUID::toString)
+					.toList())
+			))
+			.withPageable(PageRequest.of(0, contentIds.size()))
+			.build();
+
+		SearchHits<ContentSearchDocument> searchHits =
+			elasticsearchOperations.search(
+				query,
+				ContentSearchDocument.class
+			);
+
+		return searchHits.getSearchHits().stream()
+			.map(SearchHit::getContent)
+			.collect(Collectors.toMap(
+				document -> UUID.fromString(document.getId()),
+				document -> document
+			));
+	}
+
     private ContentListItemResponse toResponse(
             SearchHit<ContentSearchDocument> hit,
             Map<UUID, Content> contentById

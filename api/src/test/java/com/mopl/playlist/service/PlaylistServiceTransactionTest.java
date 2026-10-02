@@ -11,6 +11,7 @@ import com.mopl.playlist.dto.PlaylistCreateRequest;
 import com.mopl.playlist.repository.PlaylistContentRepository;
 import com.mopl.playlist.repository.PlaylistRepository;
 import com.querydsl.jpa.impl.JPAQueryFactory;
+import com.mopl.content.search.service.ContentSearchService;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -29,6 +30,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.List;
 import java.util.UUID;
@@ -66,6 +68,9 @@ class PlaylistServiceTransactionTest {
 				.getValidator();
 		}
 	}
+
+	@MockitoBean
+	private ContentSearchService contentSearchService;
 
 	@Autowired
 	private PlaylistService playlistService;

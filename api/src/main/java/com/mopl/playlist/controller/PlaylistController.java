@@ -14,7 +14,7 @@ import java.net.URI;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/playlists")
+@RequestMapping("/api/playlists")
 public class PlaylistController {
 
 	private final PlaylistService playlistService;

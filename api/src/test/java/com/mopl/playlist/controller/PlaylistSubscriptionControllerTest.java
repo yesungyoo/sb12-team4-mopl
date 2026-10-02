@@ -86,7 +86,7 @@ class PlaylistSubscriptionControllerTest {
 				.subscribe(currentUserId, playlistId);
 
 			mockMvc.perform(
-					post("/playlists/{playlistId}/subscription", playlistId)
+					post("/api/playlists/{playlistId}/subscription", playlistId)
 				)
 				.andExpect(status().isNoContent());
 		}
@@ -99,7 +99,7 @@ class PlaylistSubscriptionControllerTest {
 				.subscribe(currentUserId, playlistId);
 
 			mockMvc.perform(
-					post("/playlists/{playlistId}/subscription", playlistId)
+					post("/api/playlists/{playlistId}/subscription", playlistId)
 				)
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("PLAYLIST_001"));
@@ -113,7 +113,7 @@ class PlaylistSubscriptionControllerTest {
 				.subscribe(currentUserId, playlistId);
 
 			mockMvc.perform(
-					post("/playlists/{playlistId}/subscription", playlistId)
+					post("/api/playlists/{playlistId}/subscription", playlistId)
 				)
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("PLAYLIST_005"));
@@ -132,7 +132,7 @@ class PlaylistSubscriptionControllerTest {
 				.unsubscribe(currentUserId, playlistId);
 
 			mockMvc.perform(
-					delete("/playlists/{playlistId}/subscription", playlistId)
+					delete("/api/playlists/{playlistId}/subscription", playlistId)
 				)
 				.andExpect(status().isNoContent());
 		}
@@ -144,7 +144,7 @@ class PlaylistSubscriptionControllerTest {
 				.unsubscribe(currentUserId, playlistId);
 
 			mockMvc.perform(
-					delete("/playlists/{playlistId}/subscription", playlistId)
+					delete("/api/playlists/{playlistId}/subscription", playlistId)
 				)
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("PLAYLIST_006"));

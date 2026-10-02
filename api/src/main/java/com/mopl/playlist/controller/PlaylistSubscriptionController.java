@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/playlists/{playlistId}/subscription")
+@RequestMapping("/api/playlists/{playlistId}/subscription")
 public class PlaylistSubscriptionController {
 
 	private final PlaylistSubscriptionService playlistSubscriptionService;

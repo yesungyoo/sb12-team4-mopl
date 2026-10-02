@@ -29,6 +29,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.logout.LogoutFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 @Configuration
 @EnableWebSecurity
@@ -52,8 +54,15 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         // JwtAuthenticationFilter 는 @Component 가 아니라 여기서 직접 생성한다.
         // (Filter 빈으로 자동 스캔되면 @WebMvcTest slice 테스트에서 의존성을 못 찾아 컨텍스트 로딩이 깨짐)
-        JwtAuthenticationFilter jwtAuthenticationFilter =
-                new JwtAuthenticationFilter(jwtTokenProvider, tokenRedisService);
+		SecurityContextRepository securityContextRepository =
+			new RequestAttributeSecurityContextRepository();
+
+		JwtAuthenticationFilter jwtAuthenticationFilter =
+			new JwtAuthenticationFilter(
+				jwtTokenProvider,
+				tokenRedisService,
+				securityContextRepository
+			);
 
         http
                 // JWT 를 쿠키로 주고받으므로 CSRF 방어가 필요함.
@@ -66,6 +75,9 @@ public class SecurityConfig {
                         // 쿠키 원본 값을 그대로 비교하는 CsrfTokenRequestAttributeHandler 로 명시해야 함.
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
                 )
+				.securityContext(context -> context
+					.securityContextRepository(securityContextRepository)
+				)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(emailPasswordAuthenticationProvider)
                 .authorizeHttpRequests(auth -> auth

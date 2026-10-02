@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/conversations")
+@RequestMapping("/api/conversations")
 public class ConversationController {
 
 	private final ConversationService conversationService;

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import com.mopl.auth.config.PasswordEncoderConfig;
 import com.mopl.auth.config.SecurityConfig;
@@ -99,6 +100,24 @@ class AuthControllerTest {
         // user.getId() 를 그대로 JWT sub 로 사용하므로, 리플렉션으로 id 를 채워준다.
         org.springframework.test.util.ReflectionTestUtils.setField(activeUser, "id", userId);
     }
+
+	@Test
+	@DisplayName("JWT 인증 요청 후에도 CSRF 토큰 쿠키를 제거하지 않는다")
+	void jwtAuthenticationDoesNotRemoveCsrfToken() throws Exception {
+		String accessToken =
+			jwtTokenProvider.createAccessToken(userId, "test@mopl.com", UserRole.USER);
+
+		when(tokenRedisService.isInvalidated(eq(userId), any()))
+			.thenReturn(false);
+
+		Cookie accessTokenCookie =
+			new Cookie(AuthCookies.ACCESS_TOKEN, accessToken);
+
+		mockMvc.perform(get("/api/auth/csrf-token")
+				.cookie(accessTokenCookie))
+			.andExpect(status().isNoContent())
+			.andExpect(cookie().exists("XSRF-TOKEN"));
+	}
 
     @Nested
     @DisplayName("로그인 (POST /api/auth/sign-in)")

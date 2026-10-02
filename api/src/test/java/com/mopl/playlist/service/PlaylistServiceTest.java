@@ -12,6 +12,15 @@ import com.mopl.playlist.dto.PlaylistResponse;
 import com.mopl.playlist.dto.PlaylistUpdateRequest;
 import com.mopl.playlist.repository.PlaylistContentRepository;
 import com.mopl.playlist.repository.PlaylistRepository;
+import com.mopl.content.search.service.ContentSearchService;
+import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.document.ContentTagSearchDocument;
+import com.mopl.core.common.enums.ContentType;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +75,9 @@ class PlaylistServiceTest {
 	@Mock
 	private Validator validator;
 
+	@Mock
+	private ContentSearchService contentSearchService;
+
 	private PlaylistService playlistService;
 
 	private UUID ownerId;
@@ -80,6 +92,7 @@ class PlaylistServiceTest {
 			entityManager,
 			playlistContentRepository,
 			contentRepository,
+			contentSearchService,
 			playlistSubscriptionRepository,
 			validator
 		);
@@ -102,6 +115,137 @@ class PlaylistServiceTest {
 	}
 
 	@Nested
+	@DisplayName("검색 보강 장애 격리")
+	class SearchEnrichment {
+
+		private UUID contentId;
+
+		void stubResponse(String operation) {
+			contentId = UUID.randomUUID();
+			Content content = mock(Content.class);
+			when(content.getId()).thenReturn(contentId);
+			when(content.getType()).thenReturn(ContentType.values()[0]);
+			when(content.getTitle()).thenReturn("콘텐츠 제목");
+			when(content.getDescription()).thenReturn("콘텐츠 설명");
+			when(content.getThumbnailUrl()).thenReturn("http://thumb.url");
+			PlaylistContent playlistContent = mock(PlaylistContent.class);
+			when(playlistContent.getContent()).thenReturn(content);
+
+			if (operation.equals("list")) {
+				when(playlistRepository.findAllByCursor(any(), any(), anyInt(), any(), any(), any(), any(), any()))
+					.thenReturn(List.of(playlist));
+				when(playlistRepository.countAllMatching(any(), any(), any())).thenReturn(1L);
+				when(playlistContent.getPlaylist()).thenReturn(playlist);
+				when(playlistContentRepository.findAllByPlaylistIdIn(List.of(playlistId)))
+					.thenReturn(List.of(playlistContent));
+				when(playlistSubscriptionRepository.countByPlaylistIdIn(List.of(playlistId)))
+					.thenReturn(Map.of(playlistId, 3L));
+				when(playlistSubscriptionRepository.findSubscribedPlaylistIds(List.of(playlistId), ownerId))
+					.thenReturn(Set.of(playlistId));
+			} else {
+				when(playlistRepository.findById(playlistId)).thenReturn(Optional.of(playlist));
+				when(playlistContentRepository.findAllByPlaylistId(playlistId)).thenReturn(List.of(playlistContent));
+				when(playlistSubscriptionRepository.countByPlaylistId(playlistId)).thenReturn(3L);
+				when(playlistSubscriptionRepository.existsByPlaylistIdAndSubscriberId(playlistId, ownerId))
+					.thenReturn(true);
+			}
+		}
+
+		PlaylistResponse invoke(String operation) {
+			return switch (operation) {
+				case "get" -> playlistService.getPlaylist(playlistId, ownerId);
+				case "list" -> playlistService.getPlaylists(
+					null, null, 20, "updatedAt", "DESCENDING", ownerId, null, null, null
+				).data().get(0);
+				case "update" -> playlistService.updatePlaylist(
+					ownerId, playlistId, new PlaylistUpdateRequest("새 제목", null));
+				default -> throw new IllegalArgumentException(operation);
+			};
+		}
+
+		void assertCoreResponse(PlaylistResponse response) {
+			assertThat(response.id()).isEqualTo(playlistId);
+			assertThat(response.owner().userId()).isEqualTo(ownerId);
+			assertThat(response.title()).isEqualTo("기존 제목");
+			assertThat(response.description()).isEqualTo("기존 설명");
+			assertThat(response.updatedAt()).isEqualTo(playlist.getUpdatedAt());
+			assertThat(response.subscriberCount()).isEqualTo(3L);
+			assertThat(response.subscribedByMe()).isTrue();
+			assertThat(response.contents()).hasSize(1);
+			var content = response.contents().get(0);
+			assertThat(content.id()).isEqualTo(contentId);
+			assertThat(content.type()).isEqualTo(ContentType.values()[0]);
+			assertThat(content.title()).isEqualTo("콘텐츠 제목");
+			assertThat(content.description()).isEqualTo("콘텐츠 설명");
+			assertThat(content.thumbnailUrl()).isEqualTo("http://thumb.url");
+			verify(contentSearchService).findDocumentsByContentIds(List.of(contentId));
+		}
+
+		@ParameterizedTest
+		@ValueSource(strings = {"get", "list", "update"})
+		@DisplayName("검색 성공 시 태그와 평점 및 리뷰 수를 유지한다")
+		void preservesEnrichment(String operation) {
+			stubResponse(operation);
+			ContentSearchDocument document = mock(ContentSearchDocument.class);
+			when(document.getTags()).thenReturn(List.of(new ContentTagSearchDocument("genre", "드라마")));
+			when(document.getAverageRating()).thenReturn(4.5);
+			when(document.getReviewCount()).thenReturn(12L);
+			when(contentSearchService.findDocumentsByContentIds(List.of(contentId)))
+				.thenReturn(Map.of(contentId, document));
+
+			PlaylistResponse response = invoke(operation);
+
+			assertCoreResponse(response);
+			assertThat(response.contents().get(0).tags()).containsExactly("드라마");
+			assertThat(response.contents().get(0).averageRating()).isEqualTo(4.5);
+			assertThat(response.contents().get(0).reviewCount()).isEqualTo(12L);
+		}
+
+		@ParameterizedTest
+		@CsvSource({"get,false", "list,false", "update,false", "get,true", "list,true", "update,true"})
+		@DisplayName("검색 장애 시에도 MySQL 기반 응답과 보강 기본값을 반환한다")
+		void returnsCoreResponseWhenSearchFails(String operation, boolean serverError) {
+			stubResponse(operation);
+			when(contentSearchService.findDocumentsByContentIds(List.of(contentId)))
+				.thenThrow(serverError
+					? new UncategorizedElasticsearchException("search unavailable", 503, null, null)
+					: new DataAccessResourceFailureException("search unavailable"));
+
+			PlaylistResponse response = invoke(operation);
+
+			assertCoreResponse(response);
+			assertThat(response.contents().get(0).tags()).isEmpty();
+			assertThat(response.contents().get(0).averageRating()).isZero();
+			assertThat(response.contents().get(0).reviewCount()).isZero();
+			if (operation.equals("update")) {
+				verify(playlist).update("새 제목", null);
+				verify(entityManager).flush();
+			}
+		}
+
+		@Test
+		@DisplayName("검색의 프로그래밍 오류는 삼키지 않는다")
+		void propagatesUnexpectedException() {
+			when(playlistRepository.findById(playlistId)).thenReturn(Optional.of(playlist));
+			when(playlistContentRepository.findAllByPlaylistId(playlistId)).thenReturn(List.of());
+			IllegalArgumentException failure = new IllegalArgumentException("invalid document");
+			when(contentSearchService.findDocumentsByContentIds(List.of())).thenThrow(failure);
+
+			assertThatThrownBy(() -> playlistService.getPlaylist(playlistId, ownerId)).isSameAs(failure);
+		}
+
+		@Test
+		@DisplayName("MySQL 조회 장애는 삼키지 않는다")
+		void propagatesDatabaseFailure() {
+			DataAccessResourceFailureException failure = new DataAccessResourceFailureException("database unavailable");
+			when(playlistRepository.findById(playlistId)).thenThrow(failure);
+
+			assertThatThrownBy(() -> playlistService.getPlaylist(playlistId, ownerId)).isSameAs(failure);
+			verifyNoInteractions(contentSearchService);
+		}
+	}
+
+	@Nested
 	@DisplayName("단건 조회")
 	class GetPlaylist {
 
@@ -115,7 +259,7 @@ class PlaylistServiceTest {
 			PlaylistResponse response = playlistService.getPlaylist(playlistId, null);
 
 			assertThat(response.id()).isEqualTo(playlistId);
-			assertThat(response.ownerId()).isEqualTo(ownerId);
+			assertThat(response.owner().userId()).isEqualTo(ownerId);
 			assertThat(response.title()).isEqualTo("기존 제목");
 			// 연결된 구독과 콘텐츠가 없으면 기본값을 반환한다
 			assertThat(response.subscriberCount()).isZero();
@@ -340,7 +484,7 @@ class PlaylistServiceTest {
 			assertThat(saved.getOwner()).isEqualTo(owner);
 			assertThat(saved.getTitle()).isEqualTo("제목");
 			assertThat(saved.getDescription()).isEqualTo("설명");
-			assertThat(response.ownerId()).isEqualTo(ownerId);
+			assertThat(response.owner().userId()).isEqualTo(ownerId);
 		}
 	}
 

@@ -22,6 +22,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 /**
  * "로그인 사용자 식별" 의 핵심.
@@ -40,18 +42,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenRedisService tokenRedisService;
+	private final SecurityContextRepository securityContextRepository;
 
-    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider, TokenRedisService tokenRedisService) {
-        this.jwtTokenProvider = jwtTokenProvider;
-        this.tokenRedisService = tokenRedisService;
-    }
+	public JwtAuthenticationFilter(
+		JwtTokenProvider jwtTokenProvider,
+		TokenRedisService tokenRedisService,
+		SecurityContextRepository securityContextRepository
+	) {
+		this.jwtTokenProvider = jwtTokenProvider;
+		this.tokenRedisService = tokenRedisService;
+		this.securityContextRepository = securityContextRepository;
+	}
 
     @Override
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain filterChain
     ) throws IOException, ServletException {
         try {
-            extractAccessToken(request).ifPresent(this::authenticate);
+			extractAccessToken(request)
+				.ifPresent(token -> authenticate(token, request, response));
         } catch (JwtException | IllegalArgumentException e) {
             SecurityContextHolder.clearContext();
         }
@@ -59,7 +68,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private void authenticate(String token) {
+	private void authenticate(
+		String token,
+		HttpServletRequest request,
+		HttpServletResponse response
+	) {
         Claims claims = jwtTokenProvider.parseAccessTokenClaims(token);
         UUID userId = jwtTokenProvider.getUserId(claims);
         Instant issuedAt = jwtTokenProvider.getIssuedAt(claims);
@@ -73,8 +86,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         AuthUser authUser = new AuthUser(userId, email, role);
 
         List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
-        var authentication = new UsernamePasswordAuthenticationToken(authUser, null, authorities);
-        SecurityContextHolder.getContext().setAuthentication(authentication);
+		var authentication =
+			new UsernamePasswordAuthenticationToken(authUser, null, authorities);
+
+		SecurityContext context = SecurityContextHolder.createEmptyContext();
+		context.setAuthentication(authentication);
+
+		SecurityContextHolder.setContext(context);
+		securityContextRepository.saveContext(context, request, response);
     }
 
     private Optional<String> extractAccessToken(HttpServletRequest request) {
