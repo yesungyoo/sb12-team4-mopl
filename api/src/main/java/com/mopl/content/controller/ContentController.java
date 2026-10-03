@@ -19,7 +19,7 @@ import java.util.UUID;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 
 @RestController
-@RequestMapping("/contents")
+@RequestMapping("/api/contents")
 @RequiredArgsConstructor
 public class ContentController {
 
@@ -91,7 +91,7 @@ public class ContentController {
     public ResponseEntity<ContentResponse> createContent(@Valid @RequestBody ContentCreateRequest request) {
         ContentResponse response = contentService.createContent(request);
 
-        URI location = URI.create("/contents/" + response.id());
+        URI location = URI.create("/api/contents/" + response.id());
 
         return ResponseEntity
                 .created(location)

@@ -1,17 +1,5 @@
 package com.mopl.recommendation.service;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
-
-import org.springframework.stereotype.Service;
-
 import com.mopl.common.exception.CommonErrorCode;
 import com.mopl.common.exception.MoplException;
 import com.mopl.common.exception.user.UserErrorCode;
@@ -25,8 +13,16 @@ import com.mopl.recommendation.dto.RecommendationSectionItem;
 import com.mopl.recommendation.dto.RecommendationSectionsResponse;
 import com.mopl.recommendation.dto.RecommendationTab;
 import com.mopl.user.repository.UserRepository;
-
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
@@ -34,6 +30,7 @@ public class RecommendationSectionService {
 
     private static final int SECTION_SIZE = 10;
     private static final int NEW_CONTENT_DAYS = 14;
+    private static final int MAX_PREFERENCE_SECTIONS_PER_TYPE = 2;
 
     private static final List<ContentType> PREFERENCE_SECTION_TYPES =
             List.of(
@@ -47,53 +44,35 @@ public class RecommendationSectionService {
     private final RecommendationSectionSearchService recommendationSectionSearchService;
     private final UserRepository userRepository;
 
-    public RecommendationSectionsResponse getSections(
-            UUID userId,
-            RecommendationTab tab
-    ) {
+    public RecommendationSectionsResponse getSections(UUID userId, RecommendationTab tab) {
         if (tab == null) {
-            throw new MoplException(
-                    CommonErrorCode.INVALID_INPUT_VALUE
-            );
+            throw new MoplException(CommonErrorCode.INVALID_INPUT_VALUE);
         }
 
-        User user = userRepository
-                .findByIdAndDeletedAtIsNull(userId)
+        User user = userRepository.findByIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new MoplException(
                         UserErrorCode.USER_NOT_FOUND,
                         "존재하지 않는 사용자입니다. userId=" + userId
                 ));
 
         RecommendationPreference preference =
-                recommendationPreferenceService
-                        .createPreference(userId);
+                recommendationPreferenceService.createPreference(userId);
 
         return switch (tab) {
-            case HOME -> getHomeSections(
-                    userId,
-                    user.getName(),
-                    preference
-            );
-
-            case NEW -> getNewSections(
-                    user.getName(),
-                    preference
-            );
-
+            case HOME -> getHomeSections(userId, user.getName(), preference);
+            case NEW -> getNewSections(user.getName(), preference);
             case MOVIE -> getTypeSections(
                     userId,
                     user.getName(),
                     ContentType.MOVIE,
                     preference
             );
-
             case TV_SERIES -> getTypeSections(
                     userId,
                     user.getName(),
                     ContentType.TV_SERIES,
                     preference
             );
-
             case SPORT -> getTypeSections(
                     userId,
                     user.getName(),
@@ -108,18 +87,12 @@ public class RecommendationSectionService {
             String userName,
             RecommendationPreference preference
     ) {
-        List<RecommendationSection> sections =
-                new ArrayList<>();
-
-        Set<UUID> usedContentIds =
-                new LinkedHashSet<>();
+        List<RecommendationSection> sections = new ArrayList<>();
+        Set<UUID> usedContentIds = new LinkedHashSet<>();
 
         List<RecommendationSectionItem> recommendationItems =
                 takeUnused(
-                        findRecommendationItems(
-                                userId,
-                                null
-                        ),
+                        findRecommendationItems(userId, null),
                         usedContentIds
                 );
 
@@ -150,8 +123,7 @@ public class RecommendationSectionService {
         }
 
         LocalDateTime createdAfter =
-                LocalDateTime.now()
-                        .minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
 
         NewSectionResult newSectionResult =
                 findNewSection(
@@ -171,9 +143,7 @@ public class RecommendationSectionService {
                 sections.add(
                         createSection(
                                 "NEW_FOR_YOU",
-                                "새로 들어온 콘텐츠 중 "
-                                        + userName
-                                        + "님 취향",
+                                "새로 들어온 콘텐츠 중 " + userName + "님 취향",
                                 "최근 추가된 콘텐츠 중 취향에 맞는 콘텐츠예요.",
                                 null,
                                 null,
@@ -196,7 +166,7 @@ public class RecommendationSectionService {
 
         if (!preference.coldStart()) {
             for (ContentType contentType : PREFERENCE_SECTION_TYPES) {
-                addPreferenceSection(
+                addPreferenceSections(
                         sections,
                         usedContentIds,
                         userName,
@@ -206,24 +176,18 @@ public class RecommendationSectionService {
             }
         }
 
-        return RecommendationSectionsResponse.of(
-                sections
-        );
+        return RecommendationSectionsResponse.of(sections);
     }
 
     private RecommendationSectionsResponse getNewSections(
             String userName,
             RecommendationPreference preference
     ) {
-        List<RecommendationSection> sections =
-                new ArrayList<>();
-
-        Set<UUID> usedContentIds =
-                new LinkedHashSet<>();
+        List<RecommendationSection> sections = new ArrayList<>();
+        Set<UUID> usedContentIds = new LinkedHashSet<>();
 
         LocalDateTime createdAfter =
-                LocalDateTime.now()
-                        .minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
 
         NewSectionResult newSectionResult =
                 findNewSection(
@@ -243,9 +207,7 @@ public class RecommendationSectionService {
                 sections.add(
                         createSection(
                                 "NEW_FOR_YOU",
-                                "새 콘텐츠 중 "
-                                        + userName
-                                        + "님 취향",
+                                "새 콘텐츠 중 " + userName + "님 취향",
                                 "최근 추가된 콘텐츠 중 취향에 맞는 콘텐츠예요.",
                                 null,
                                 null,
@@ -287,9 +249,7 @@ public class RecommendationSectionService {
                 createdAfter
         );
 
-        return RecommendationSectionsResponse.of(
-                sections
-        );
+        return RecommendationSectionsResponse.of(sections);
     }
 
     private RecommendationSectionsResponse getTypeSections(
@@ -298,11 +258,8 @@ public class RecommendationSectionService {
             ContentType contentType,
             RecommendationPreference preference
     ) {
-        List<RecommendationSection> sections =
-                new ArrayList<>();
-
-        Set<UUID> usedContentIds =
-                new LinkedHashSet<>();
+        List<RecommendationSection> sections = new ArrayList<>();
+        Set<UUID> usedContentIds = new LinkedHashSet<>();
 
         addTypeRecommendationSection(
                 sections,
@@ -314,8 +271,7 @@ public class RecommendationSectionService {
         );
 
         LocalDateTime createdAfter =
-                LocalDateTime.now()
-                        .minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
 
         addNewTypeSection(
                 sections,
@@ -325,7 +281,7 @@ public class RecommendationSectionService {
         );
 
         if (!preference.coldStart()) {
-            addPreferenceSection(
+            addPreferenceSections(
                     sections,
                     usedContentIds,
                     userName,
@@ -334,9 +290,7 @@ public class RecommendationSectionService {
             );
         }
 
-        return RecommendationSectionsResponse.of(
-                sections
-        );
+        return RecommendationSectionsResponse.of(sections);
     }
 
     private void addTypeRecommendationSection(
@@ -349,12 +303,11 @@ public class RecommendationSectionService {
     ) {
         if (preference.coldStart()) {
             List<RecommendationSectionItem> popularItems =
-                    recommendationSectionSearchService
-                            .findPopularByType(
-                                    contentType,
-                                    SECTION_SIZE,
-                                    Set.copyOf(usedContentIds)
-                            );
+                    recommendationSectionSearchService.findPopularByType(
+                            contentType,
+                            SECTION_SIZE,
+                            Set.copyOf(usedContentIds)
+                    );
 
             List<RecommendationSectionItem> selectedItems =
                     takeUnused(
@@ -395,9 +348,7 @@ public class RecommendationSectionService {
                                     userName,
                                     contentType
                             ),
-                            personalizedDescription(
-                                    contentType
-                            ),
+                            personalizedDescription(contentType),
                             contentType,
                             null,
                             personalizedItems
@@ -408,12 +359,11 @@ public class RecommendationSectionService {
         }
 
         List<RecommendationSectionItem> popularItems =
-                recommendationSectionSearchService
-                        .findPopularByType(
-                                contentType,
-                                SECTION_SIZE,
-                                Set.copyOf(usedContentIds)
-                        );
+                recommendationSectionSearchService.findPopularByType(
+                        contentType,
+                        SECTION_SIZE,
+                        Set.copyOf(usedContentIds)
+                );
 
         List<RecommendationSectionItem> selectedItems =
                 takeUnused(
@@ -442,13 +392,12 @@ public class RecommendationSectionService {
             LocalDateTime createdAfter
     ) {
         List<RecommendationSectionItem> candidates =
-                recommendationSectionSearchService
-                        .findNewByType(
-                                contentType,
-                                createdAfter,
-                                SECTION_SIZE,
-                                Set.copyOf(usedContentIds)
-                        );
+                recommendationSectionSearchService.findNewByType(
+                        contentType,
+                        createdAfter,
+                        SECTION_SIZE,
+                        Set.copyOf(usedContentIds)
+                );
 
         List<RecommendationSectionItem> selectedItems =
                 takeUnused(
@@ -472,59 +421,61 @@ public class RecommendationSectionService {
         );
     }
 
-    private void addPreferenceSection(
+    private void addPreferenceSections(
             List<RecommendationSection> sections,
             Set<UUID> usedContentIds,
             String userName,
             ContentType contentType,
             RecommendationPreference preference
     ) {
-        Optional<RecommendationPreferredTag> preferredTag =
-                findTopPreferredTag(
+        List<RecommendationPreferredTag> preferredTags =
+                findPreferredTags(
                         preference,
                         contentType
                 );
 
-        if (preferredTag.isEmpty()) {
-            return;
+        int sectionIndex = 1;
+
+        for (RecommendationPreferredTag preferredTag : preferredTags) {
+            List<RecommendationSectionItem> candidates =
+                    recommendationSectionSearchService
+                            .findPopularByPreferenceTag(
+                                    contentType,
+                                    preferredTag,
+                                    SECTION_SIZE,
+                                    Set.copyOf(usedContentIds)
+                            );
+
+            List<RecommendationSectionItem> selectedItems =
+                    takeUnused(
+                            candidates,
+                            usedContentIds
+                    );
+
+            if (selectedItems.isEmpty()) {
+                continue;
+            }
+
+            sections.add(
+                    createSection(
+                            preferenceKey(
+                                    contentType,
+                                    sectionIndex
+                            ),
+                            preferenceTitle(
+                                    userName,
+                                    contentType,
+                                    preferredTag
+                            ),
+                            preferenceDescription(contentType),
+                            contentType,
+                            preferredTag.value(),
+                            selectedItems
+                    )
+            );
+
+            sectionIndex++;
         }
-
-        RecommendationPreferredTag tag =
-                preferredTag.orElseThrow();
-
-        List<RecommendationSectionItem> candidates =
-                recommendationSectionSearchService
-                        .findPopularByPreferenceTag(
-                                contentType,
-                                tag,
-                                SECTION_SIZE,
-                                Set.copyOf(usedContentIds)
-                        );
-
-        List<RecommendationSectionItem> selectedItems =
-                takeUnused(
-                        candidates,
-                        usedContentIds
-                );
-
-        if (selectedItems.isEmpty()) {
-            return;
-        }
-
-        sections.add(
-                createSection(
-                        preferenceKey(contentType),
-                        preferenceTitle(
-                                userName,
-                                contentType,
-                                tag.value()
-                        ),
-                        preferenceDescription(contentType),
-                        contentType,
-                        tag.value(),
-                        selectedItems
-                )
-        );
     }
 
     private NewSectionResult findNewSection(
@@ -549,12 +500,11 @@ public class RecommendationSectionService {
         }
 
         return new NewSectionResult(
-                recommendationSectionSearchService
-                        .findNew(
-                                createdAfter,
-                                SECTION_SIZE,
-                                Set.copyOf(usedContentIds)
-                        ),
+                recommendationSectionSearchService.findNew(
+                        createdAfter,
+                        SECTION_SIZE,
+                        Set.copyOf(usedContentIds)
+                ),
                 false
         );
     }
@@ -571,26 +521,24 @@ public class RecommendationSectionService {
                 Set.copyOf(usedContentIds);
 
         for (ContentType contentType : PREFERENCE_SECTION_TYPES) {
-            Optional<RecommendationPreferredTag> preferredTag =
-                    findTopPreferredTag(
+            List<RecommendationPreferredTag> preferredTags =
+                    findPreferredTags(
                             preference,
                             contentType
                     );
 
-            if (preferredTag.isEmpty()) {
-                continue;
+            for (RecommendationPreferredTag preferredTag : preferredTags) {
+                candidates.addAll(
+                        recommendationSectionSearchService
+                                .findNewByPreferenceTag(
+                                        contentType,
+                                        preferredTag,
+                                        createdAfter,
+                                        SECTION_SIZE,
+                                        excludedContentIds
+                                )
+                );
             }
-
-            candidates.addAll(
-                    recommendationSectionSearchService
-                            .findNewByPreferenceTag(
-                                    contentType,
-                                    preferredTag.orElseThrow(),
-                                    createdAfter,
-                                    SECTION_SIZE,
-                                    excludedContentIds
-                            )
-            );
         }
 
         Comparator<RecommendationSectionItem> comparator =
@@ -631,15 +579,13 @@ public class RecommendationSectionService {
             ContentType contentType
     ) {
         List<RecommendationItem> recommendations =
-                recommendationService
-                        .getRecommendations(userId);
+                recommendationService.getRecommendations(userId);
 
         List<UUID> contentIds =
                 recommendations.stream()
                         .filter(recommendation ->
                                 contentType == null
-                                        || recommendation.type()
-                                        == contentType
+                                        || recommendation.type() == contentType
                         )
                         .map(RecommendationItem::contentId)
                         .toList();
@@ -652,7 +598,7 @@ public class RecommendationSectionService {
                 .findByContentIds(contentIds);
     }
 
-    private Optional<RecommendationPreferredTag> findTopPreferredTag(
+    private List<RecommendationPreferredTag> findPreferredTags(
             RecommendationPreference preference,
             ContentType contentType
     ) {
@@ -660,7 +606,7 @@ public class RecommendationSectionService {
                 preference.preferredTagsByType();
 
         if (preferredTagsByType == null) {
-            return Optional.empty();
+            return List.of();
         }
 
         return preferredTagsByType
@@ -669,7 +615,8 @@ public class RecommendationSectionService {
                         List.of()
                 )
                 .stream()
-                .findFirst();
+                .limit(MAX_PREFERENCE_SECTIONS_PER_TYPE)
+                .toList();
     }
 
     private List<RecommendationSectionItem> takeUnused(
@@ -740,12 +687,22 @@ public class RecommendationSectionService {
         };
     }
 
-    private String preferenceKey(ContentType contentType) {
-        return switch (contentType) {
-            case MOVIE -> "PREFERENCE_TOP_MOVIE";
-            case TV_SERIES -> "PREFERENCE_TOP_TV_SERIES";
-            case SPORT -> "PREFERENCE_TOP_SPORT";
-        };
+    private String preferenceKey(
+            ContentType contentType,
+            int sectionIndex
+    ) {
+        String baseKey =
+                switch (contentType) {
+                    case MOVIE -> "PREFERENCE_TOP_MOVIE";
+                    case TV_SERIES -> "PREFERENCE_TOP_TV_SERIES";
+                    case SPORT -> "PREFERENCE_TOP_SPORT";
+                };
+
+        if (sectionIndex == 1) {
+            return baseKey;
+        }
+
+        return baseKey + "_" + sectionIndex;
     }
 
     private String personalizedTitle(
@@ -753,122 +710,120 @@ public class RecommendationSectionService {
             ContentType contentType
     ) {
         return switch (contentType) {
-            case MOVIE ->
-                    userName + "님을 위한 영화 추천";
-
-            case TV_SERIES ->
-                    userName + "님을 위한 TV 시리즈 추천";
-
-            case SPORT ->
-                    userName + "님을 위한 스포츠 추천";
+            case MOVIE -> userName + "님을 위한 영화 추천";
+            case TV_SERIES -> userName + "님을 위한 TV 시리즈 추천";
+            case SPORT -> userName + "님을 위한 스포츠 추천";
         };
     }
 
     private String popularTitle(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "지금 인기 있는 영화";
-
-            case TV_SERIES ->
-                    "지금 인기 있는 TV 시리즈";
-
-            case SPORT ->
-                    "지금 인기 있는 스포츠 콘텐츠";
+            case MOVIE -> "지금 인기 있는 영화";
+            case TV_SERIES -> "지금 인기 있는 TV 시리즈";
+            case SPORT -> "지금 인기 있는 스포츠 콘텐츠";
         };
     }
 
     private String newTitle(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "새로 추가된 영화";
-
-            case TV_SERIES ->
-                    "새로 추가된 TV 시리즈";
-
-            case SPORT ->
-                    "새로 추가된 스포츠";
+            case MOVIE -> "새로 추가된 영화";
+            case TV_SERIES -> "새로 추가된 TV 시리즈";
+            case SPORT -> "새로 추가된 스포츠";
         };
     }
 
     private String preferenceTitle(
             String userName,
             ContentType contentType,
-            String tag
+            RecommendationPreferredTag preferredTag
     ) {
+        String displayTag = displayTagValue(preferredTag);
+
         return switch (contentType) {
             case MOVIE ->
                     userName
                             + "님이 좋아하는 "
-                            + tag
+                            + displayTag
                             + " 영화 TOP 10";
-
             case TV_SERIES ->
                     userName
                             + "님 취향의 "
-                            + tag
+                            + displayTag
                             + " TV 시리즈 TOP 10";
-
             case SPORT ->
                     userName
                             + "님이 자주 보는 "
-                            + tag
+                            + displayTag
                             + " 콘텐츠 TOP 10";
         };
     }
 
-    private String personalizedDescription(
-            ContentType contentType
+    private String displayTagValue(
+            RecommendationPreferredTag preferredTag
     ) {
+        if (!"GENRE".equals(preferredTag.tag())) {
+            return preferredTag.value();
+        }
+
+        return switch (preferredTag.value()) {
+            case "ACTION" -> "액션";
+            case "ADVENTURE" -> "모험";
+            case "ANIMATION" -> "애니메이션";
+            case "COMEDY" -> "코미디";
+            case "CRIME" -> "범죄";
+            case "DOCUMENTARY" -> "다큐멘터리";
+            case "DRAMA" -> "드라마";
+            case "FAMILY" -> "가족";
+            case "FANTASY" -> "판타지";
+            case "HISTORY" -> "역사";
+            case "HORROR" -> "공포";
+            case "MUSIC" -> "음악";
+            case "MYSTERY" -> "미스터리";
+            case "ROMANCE" -> "로맨스";
+            case "SF", "SCI_FI" -> "SF";
+            case "TV_MOVIE" -> "TV 영화";
+            case "THRILLER" -> "스릴러";
+            case "WAR" -> "전쟁";
+            case "WESTERN" -> "서부";
+            case "KIDS" -> "키즈";
+            case "NEWS" -> "뉴스";
+            case "REALITY" -> "리얼리티";
+            case "SOAP" -> "솝 오페라";
+            case "TALK" -> "토크";
+            case "POLITICS" -> "정치";
+            default -> preferredTag.value();
+        };
+    }
+
+    private String personalizedDescription(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "취향과 이용 기록을 바탕으로 추천한 영화예요.";
-
-            case TV_SERIES ->
-                    "취향과 이용 기록을 바탕으로 추천한 TV 시리즈예요.";
-
-            case SPORT ->
-                    "취향과 이용 기록을 바탕으로 추천한 스포츠 콘텐츠예요.";
+            case MOVIE -> "취향과 이용 기록을 바탕으로 추천한 영화예요.";
+            case TV_SERIES -> "취향과 이용 기록을 바탕으로 추천한 TV 시리즈예요.";
+            case SPORT -> "취향과 이용 기록을 바탕으로 추천한 스포츠 콘텐츠예요.";
         };
     }
 
     private String popularDescription(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "MOPL에서 인기 있는 영화예요.";
-
-            case TV_SERIES ->
-                    "MOPL에서 인기 있는 TV 시리즈예요.";
-
-            case SPORT ->
-                    "MOPL에서 인기 있는 스포츠 콘텐츠예요.";
+            case MOVIE -> "MOPL에서 인기 있는 영화예요.";
+            case TV_SERIES -> "MOPL에서 인기 있는 TV 시리즈예요.";
+            case SPORT -> "MOPL에서 인기 있는 스포츠 콘텐츠예요.";
         };
     }
 
     private String newDescription(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "최근 MOPL에 추가된 영화예요.";
-
-            case TV_SERIES ->
-                    "최근 MOPL에 추가된 TV 시리즈예요.";
-
-            case SPORT ->
-                    "최근 MOPL에 추가된 스포츠 콘텐츠예요.";
+            case MOVIE -> "최근 MOPL에 추가된 영화예요.";
+            case TV_SERIES -> "최근 MOPL에 추가된 TV 시리즈예요.";
+            case SPORT -> "최근 MOPL에 추가된 스포츠 콘텐츠예요.";
         };
     }
 
-    private String preferenceDescription(
-            ContentType contentType
-    ) {
+    private String preferenceDescription(ContentType contentType) {
         return switch (contentType) {
-            case MOVIE ->
-                    "선호 태그를 바탕으로 추천한 영화예요.";
-
-            case TV_SERIES ->
-                    "선호 태그를 바탕으로 추천한 TV 시리즈예요.";
-
-            case SPORT ->
-                    "선호 태그를 바탕으로 추천한 스포츠 콘텐츠예요.";
+            case MOVIE -> "선호 태그를 바탕으로 추천한 영화예요.";
+            case TV_SERIES -> "선호 태그를 바탕으로 추천한 TV 시리즈예요.";
+            case SPORT -> "선호 태그를 바탕으로 추천한 스포츠 콘텐츠예요.";
         };
     }
 

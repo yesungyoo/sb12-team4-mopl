@@ -58,4 +58,54 @@
         updated_at = NOW()
     </insert>
 
+    <delete id="deleteTagsByContents">
+        DELETE ct
+        FROM content_tags ct
+        INNER JOIN contents c
+        ON c.id = ct.content_id
+        WHERE c.deleted_at IS NULL
+        AND (
+        <foreach
+                collection="contents"
+                item="content"
+                separator=" OR "
+        >
+            (
+            c.type = #{content.type}
+            AND c.external_source = #{content.externalSource}
+            AND c.external_id = #{content.externalId}
+            )
+        </foreach>
+        )
+    </delete>
+
+    <insert id="bulkInsertTags">
+        INSERT INTO content_tags (
+        content_id,
+        tag,
+        value
+        )
+        <foreach
+                collection="contents"
+                item="content"
+                separator=" UNION ALL "
+        >
+            <foreach
+                    collection="content.tags"
+                    item="tag"
+                    separator=" UNION ALL "
+            >
+                SELECT
+                c.id,
+                #{tag.tag},
+                #{tag.value}
+                FROM contents c
+                WHERE c.type = #{content.type}
+                AND c.external_source = #{content.externalSource}
+                AND c.external_id = #{content.externalId}
+                AND c.deleted_at IS NULL
+            </foreach>
+        </foreach>
+    </insert>
+
 </mapper>

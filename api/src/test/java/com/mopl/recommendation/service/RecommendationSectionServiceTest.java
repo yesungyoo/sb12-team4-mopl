@@ -8,18 +8,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.recommendation.dto.RecommendationItem;
@@ -29,6 +17,16 @@ import com.mopl.recommendation.dto.RecommendationSectionItem;
 import com.mopl.recommendation.dto.RecommendationSectionsResponse;
 import com.mopl.recommendation.dto.RecommendationTab;
 import com.mopl.user.repository.UserRepository;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class RecommendationSectionServiceTest {
@@ -61,7 +59,6 @@ class RecommendationSectionServiceTest {
     @Test
     void returnsPersonalizedHomeSectionsInExpectedOrder() {
         UUID userId = UUID.randomUUID();
-
         User user = mockUser("소현");
 
         RecommendationPreferredTag movieTag =
@@ -148,23 +145,17 @@ class RecommendationSectionServiceTest {
                 );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
-                .thenReturn(
-                        java.util.Optional.of(user)
-                );
+                .thenReturn(java.util.Optional.of(user));
 
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
 
         when(recommendationService.getRecommendations(userId))
-                .thenReturn(
-                        List.of(aiRecommendation)
-                );
+                .thenReturn(List.of(aiRecommendation));
 
         when(recommendationSectionSearchService.findByContentIds(
                 List.of(aiContentId)
-        )).thenReturn(
-                List.of(aiItem)
-        );
+        )).thenReturn(List.of(aiItem));
 
         when(recommendationSectionSearchService.findNewByPreferenceTag(
                 eq(ContentType.MOVIE),
@@ -172,9 +163,7 @@ class RecommendationSectionServiceTest {
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(newItem)
-        );
+        )).thenReturn(List.of(newItem));
 
         when(recommendationSectionSearchService.findNewByPreferenceTag(
                 eq(ContentType.SPORT),
@@ -182,9 +171,7 @@ class RecommendationSectionServiceTest {
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of()
-        );
+        )).thenReturn(List.of());
 
         when(recommendationSectionSearchService.findNewByPreferenceTag(
                 eq(ContentType.TV_SERIES),
@@ -192,43 +179,34 @@ class RecommendationSectionServiceTest {
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of()
-        );
+        )).thenReturn(List.of());
 
         when(recommendationSectionSearchService.findPopularByPreferenceTag(
                 eq(ContentType.MOVIE),
                 eq(movieTag),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(movieItem)
-        );
+        )).thenReturn(List.of(movieItem));
 
         when(recommendationSectionSearchService.findPopularByPreferenceTag(
                 eq(ContentType.SPORT),
                 eq(sportTag),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(sportItem)
-        );
+        )).thenReturn(List.of(sportItem));
 
         when(recommendationSectionSearchService.findPopularByPreferenceTag(
                 eq(ContentType.TV_SERIES),
                 eq(tvTag),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(tvItem)
-        );
+        )).thenReturn(List.of(tvItem));
 
         RecommendationSectionsResponse response =
-                recommendationSectionService
-                        .getSections(
-                                userId,
-                                RecommendationTab.HOME
-                        );
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.HOME
+                );
 
         assertThat(response.sections())
                 .extracting(section -> section.key())
@@ -242,9 +220,233 @@ class RecommendationSectionServiceTest {
     }
 
     @Test
+    void returnsMultiplePreferenceSectionsForSameContentType() {
+        UUID userId = UUID.randomUUID();
+        User user = mockUser("소현");
+
+        RecommendationPreferredTag sfTag =
+                new RecommendationPreferredTag(
+                        "GENRE",
+                        "SF",
+                        10L
+                );
+
+        RecommendationPreferredTag actionTag =
+                new RecommendationPreferredTag(
+                        "GENRE",
+                        "ACTION",
+                        8L
+                );
+
+        RecommendationPreference preference =
+                RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(),
+                        Map.of(
+                                ContentType.MOVIE,
+                                List.of(
+                                        sfTag,
+                                        actionTag
+                                )
+                        )
+                );
+
+        UUID personalizedContentId = UUID.randomUUID();
+        UUID sfContentId = UUID.randomUUID();
+        UUID actionContentId = UUID.randomUUID();
+
+        RecommendationItem recommendation =
+                recommendationItem(
+                        personalizedContentId,
+                        "Personalized",
+                        ContentType.MOVIE
+                );
+
+        RecommendationSectionItem personalizedItem =
+                sectionItem(
+                        personalizedContentId,
+                        "Personalized",
+                        ContentType.MOVIE
+                );
+
+        RecommendationSectionItem sfItem =
+                sectionItem(
+                        sfContentId,
+                        "SF Movie",
+                        ContentType.MOVIE
+                );
+
+        RecommendationSectionItem actionItem =
+                sectionItem(
+                        actionContentId,
+                        "Action Movie",
+                        ContentType.MOVIE
+                );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId))
+                .thenReturn(java.util.Optional.of(user));
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(preference);
+
+        when(recommendationService.getRecommendations(userId))
+                .thenReturn(List.of(recommendation));
+
+        when(recommendationSectionSearchService.findByContentIds(
+                List.of(personalizedContentId)
+        )).thenReturn(List.of(personalizedItem));
+
+        when(recommendationSectionSearchService.findNewByType(
+                eq(ContentType.MOVIE),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of());
+
+        when(recommendationSectionSearchService.findPopularByPreferenceTag(
+                eq(ContentType.MOVIE),
+                eq(sfTag),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of(sfItem));
+
+        when(recommendationSectionSearchService.findPopularByPreferenceTag(
+                eq(ContentType.MOVIE),
+                eq(actionTag),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of(actionItem));
+
+        RecommendationSectionsResponse response =
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.MOVIE
+                );
+
+        assertThat(response.sections())
+                .extracting(section -> section.key())
+                .containsExactly(
+                        "PERSONALIZED_MOVIE",
+                        "PREFERENCE_TOP_MOVIE",
+                        "PREFERENCE_TOP_MOVIE_2"
+                );
+
+        assertThat(response.sections())
+                .extracting(section -> section.tag())
+                .containsExactly(
+                        null,
+                        "SF",
+                        "ACTION"
+                );
+    }
+
+    @Test
+    void newTabUsesAllPreferredTagsForPersonalizedNewSection() {
+        UUID userId = UUID.randomUUID();
+        User user = mockUser("소현");
+
+        RecommendationPreferredTag sfTag =
+                new RecommendationPreferredTag(
+                        "GENRE",
+                        "SF",
+                        10L
+                );
+
+        RecommendationPreferredTag actionTag =
+                new RecommendationPreferredTag(
+                        "GENRE",
+                        "ACTION",
+                        8L
+                );
+
+        RecommendationPreference preference =
+                RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(),
+                        Map.of(
+                                ContentType.MOVIE,
+                                List.of(
+                                        sfTag,
+                                        actionTag
+                                )
+                        )
+                );
+
+        UUID newContentId = UUID.randomUUID();
+
+        RecommendationSectionItem newItem =
+                sectionItem(
+                        newContentId,
+                        "New Action Movie",
+                        ContentType.MOVIE
+                );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId))
+                .thenReturn(java.util.Optional.of(user));
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(preference);
+
+        when(recommendationSectionSearchService.findNewByPreferenceTag(
+                eq(ContentType.MOVIE),
+                eq(sfTag),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of());
+
+        when(recommendationSectionSearchService.findNewByPreferenceTag(
+                eq(ContentType.MOVIE),
+                eq(actionTag),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of(newItem));
+
+        when(recommendationSectionSearchService.findNewByType(
+                eq(ContentType.MOVIE),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of());
+
+        when(recommendationSectionSearchService.findNewByType(
+                eq(ContentType.TV_SERIES),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of());
+
+        when(recommendationSectionSearchService.findNewByType(
+                eq(ContentType.SPORT),
+                any(LocalDateTime.class),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of());
+
+        RecommendationSectionsResponse response =
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.NEW
+                );
+
+        assertThat(response.sections())
+                .extracting(section -> section.key())
+                .containsExactly("NEW_FOR_YOU");
+
+        verify(recommendationSectionSearchService)
+                .findNewByPreferenceTag(
+                        eq(ContentType.MOVIE),
+                        eq(actionTag),
+                        any(LocalDateTime.class),
+                        eq(10),
+                        anySet()
+                );
+    }
+
+    @Test
     void newTabPassesPreviouslyUsedIdsToFollowingSearches() {
         UUID userId = UUID.randomUUID();
-
         User user = mockUser("소현");
 
         RecommendationPreference preference =
@@ -284,9 +486,7 @@ class RecommendationSectionServiceTest {
                 );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
-                .thenReturn(
-                        java.util.Optional.of(user)
-                );
+                .thenReturn(java.util.Optional.of(user));
 
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
@@ -295,43 +495,34 @@ class RecommendationSectionServiceTest {
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(genericNew)
-        );
+        )).thenReturn(List.of(genericNew));
 
         when(recommendationSectionSearchService.findNewByType(
                 eq(ContentType.MOVIE),
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(movie)
-        );
+        )).thenReturn(List.of(movie));
 
         when(recommendationSectionSearchService.findNewByType(
                 eq(ContentType.TV_SERIES),
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(tv)
-        );
+        )).thenReturn(List.of(tv));
 
         when(recommendationSectionSearchService.findNewByType(
                 eq(ContentType.SPORT),
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(sport)
-        );
+        )).thenReturn(List.of(sport));
 
         RecommendationSectionsResponse response =
-                recommendationSectionService
-                        .getSections(
-                                userId,
-                                RecommendationTab.NEW
-                        );
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.NEW
+                );
 
         assertThat(response.sections())
                 .extracting(section -> section.key())
@@ -392,7 +583,6 @@ class RecommendationSectionServiceTest {
     @Test
     void coldStartMovieTabUsesPopularFallbackAndOmitsPreferenceSection() {
         UUID userId = UUID.randomUUID();
-
         User user = mockUser("소현");
 
         RecommendationPreference preference =
@@ -416,9 +606,7 @@ class RecommendationSectionServiceTest {
                 );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
-                .thenReturn(
-                        java.util.Optional.of(user)
-                );
+                .thenReturn(java.util.Optional.of(user));
 
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
@@ -427,25 +615,20 @@ class RecommendationSectionServiceTest {
                 eq(ContentType.MOVIE),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(popularItem)
-        );
+        )).thenReturn(List.of(popularItem));
 
         when(recommendationSectionSearchService.findNewByType(
                 eq(ContentType.MOVIE),
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(newItem)
-        );
+        )).thenReturn(List.of(newItem));
 
         RecommendationSectionsResponse response =
-                recommendationSectionService
-                        .getSections(
-                                userId,
-                                RecommendationTab.MOVIE
-                        );
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.MOVIE
+                );
 
         assertThat(response.sections())
                 .extracting(section -> section.key())
@@ -463,7 +646,6 @@ class RecommendationSectionServiceTest {
             String preferenceKey
     ) {
         UUID userId = UUID.randomUUID();
-
         User user = mockUser("소현");
 
         RecommendationPreferredTag preferredTag =
@@ -516,48 +698,37 @@ class RecommendationSectionServiceTest {
                 );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
-                .thenReturn(
-                        java.util.Optional.of(user)
-                );
+                .thenReturn(java.util.Optional.of(user));
 
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
 
         when(recommendationService.getRecommendations(userId))
-                .thenReturn(
-                        List.of(recommendation)
-                );
+                .thenReturn(List.of(recommendation));
 
         when(recommendationSectionSearchService.findByContentIds(
                 List.of(personalizedContentId)
-        )).thenReturn(
-                List.of(personalizedItem)
-        );
+        )).thenReturn(List.of(personalizedItem));
 
         when(recommendationSectionSearchService.findNewByType(
                 eq(contentType),
                 any(LocalDateTime.class),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(newItem)
-        );
+        )).thenReturn(List.of(newItem));
 
         when(recommendationSectionSearchService.findPopularByPreferenceTag(
                 eq(contentType),
                 eq(preferredTag),
                 eq(10),
                 anySet()
-        )).thenReturn(
-                List.of(preferenceItem)
-        );
+        )).thenReturn(List.of(preferenceItem));
 
         RecommendationSectionsResponse response =
-                recommendationSectionService
-                        .getSections(
-                                userId,
-                                tab
-                        );
+                recommendationSectionService.getSections(
+                        userId,
+                        tab
+                );
 
         assertThat(response.sections())
                 .extracting(section -> section.key())
@@ -582,8 +753,7 @@ class RecommendationSectionServiceTest {
     }
 
     private User mockUser(String name) {
-        User user =
-                mock(User.class);
+        User user = mock(User.class);
 
         when(user.getName())
                 .thenReturn(name);

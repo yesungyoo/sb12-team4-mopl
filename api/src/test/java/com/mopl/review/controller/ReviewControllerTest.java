@@ -1,46 +1,44 @@
 package com.mopl.review.controller;
 
-import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.common.exception.review.ReviewNotFoundException;
-import com.mopl.review.dto.ReviewAuthorResponse;
-import com.mopl.review.dto.ReviewListResponse;
-import com.mopl.review.dto.ReviewResponse;
-import com.mopl.review.service.ReviewService;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mopl.auth.dto.AuthUser;
-import com.mopl.common.exception.review.ReviewAccessDeniedException;
-import com.mopl.review.dto.ReviewCreateRequest;
-import com.mopl.review.dto.ReviewUpdateRequest;
-
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
-
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mopl.auth.dto.AuthUser;
+import com.mopl.common.exception.content.ContentNotFoundException;
+import com.mopl.common.exception.review.ReviewAccessDeniedException;
+import com.mopl.common.exception.review.ReviewNotFoundException;
+import com.mopl.review.dto.ReviewAuthorResponse;
+import com.mopl.review.dto.ReviewCreateRequest;
+import com.mopl.review.dto.ReviewListResponse;
+import com.mopl.review.dto.ReviewResponse;
+import com.mopl.review.dto.ReviewUpdateRequest;
+import com.mopl.review.service.ReviewService;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(ReviewController.class)
 @AutoConfigureMockMvc(addFilters = false)
@@ -91,7 +89,7 @@ class ReviewControllerTest {
         when(reviewService.getReview(reviewId))
                 .thenReturn(createResponse(reviewId, contentId));
 
-        mockMvc.perform(get("/reviews/{reviewId}", reviewId))
+        mockMvc.perform(get("/api/reviews/{reviewId}", reviewId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(reviewId.toString()))
                 .andExpect(jsonPath("$.contentId").value(contentId.toString()))
@@ -107,7 +105,7 @@ class ReviewControllerTest {
         when(reviewService.getReview(reviewId))
                 .thenThrow(new ReviewNotFoundException());
 
-        mockMvc.perform(get("/reviews/{reviewId}", reviewId))
+        mockMvc.perform(get("/api/reviews/{reviewId}", reviewId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("REVIEW_001"));
     }
@@ -120,11 +118,16 @@ class ReviewControllerTest {
 
         ReviewListResponse response = new ReviewListResponse(
                 List.of(createResponse(reviewId, contentId)),
-                0, 20, 1, 1);
+                0,
+                20,
+                1,
+                1
+        );
 
-        when(reviewService.getReviews(eq(contentId), any())).thenReturn(response);
+        when(reviewService.getReviews(eq(contentId), any()))
+                .thenReturn(response);
 
-        mockMvc.perform(get("/contents/{contentId}/reviews", contentId))
+        mockMvc.perform(get("/api/contents/{contentId}/reviews", contentId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reviews.length()").value(1))
                 .andExpect(jsonPath("$.page").value(0))
@@ -140,25 +143,9 @@ class ReviewControllerTest {
         when(reviewService.getReviews(eq(contentId), any()))
                 .thenThrow(new ContentNotFoundException());
 
-        mockMvc.perform(get("/contents/{contentId}/reviews", contentId))
+        mockMvc.perform(get("/api/contents/{contentId}/reviews", contentId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONTENT_001"));
-    }
-
-    private ReviewResponse createResponse(UUID reviewId, UUID contentId) {
-        return new ReviewResponse(
-                reviewId,
-                contentId,
-                new ReviewAuthorResponse(
-                        UUID.randomUUID(),
-                        "리뷰 작성자",
-                        null
-                ),
-                new BigDecimal("4.5"),
-                "테스트 리뷰",
-                LocalDateTime.of(2026,9,9,12, 0),
-                LocalDateTime.of(2026, 9, 9, 12, 0)
-        );
     }
 
     @Test
@@ -176,39 +163,18 @@ class ReviewControllerTest {
                 eq(currentUserId),
                 eq(contentId),
                 any(ReviewCreateRequest.class)
-        )).thenReturn(
-                createResponse(reviewId, contentId)
-        );
+        )).thenReturn(createResponse(reviewId, contentId));
 
         mockMvc.perform(
-                        post(
-                                "/contents/{contentId}/reviews",
-                                contentId
-                        )
+                        post("/api/contents/{contentId}/reviews", contentId)
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        objectMapper.writeValueAsString(
-                                                request
-                                        )
-                                )
+                                .content(objectMapper.writeValueAsString(request))
                 )
                 .andExpect(status().isCreated())
-                .andExpect(
-                        jsonPath("$.id")
-                                .value(reviewId.toString())
-                )
-                .andExpect(
-                        jsonPath("$.contentId")
-                                .value(contentId.toString())
-                )
-                .andExpect(
-                        jsonPath("$.rating")
-                                .value(4.5)
-                )
-                .andExpect(
-                        jsonPath("$.text")
-                                .value("테스트 리뷰")
-                );
+                .andExpect(jsonPath("$.id").value(reviewId.toString()))
+                .andExpect(jsonPath("$.contentId").value(contentId.toString()))
+                .andExpect(jsonPath("$.rating").value(4.5))
+                .andExpect(jsonPath("$.text").value("테스트 리뷰"));
 
         verify(reviewService).createReview(
                 eq(currentUserId),
@@ -261,30 +227,14 @@ class ReviewControllerTest {
         )).thenReturn(response);
 
         mockMvc.perform(
-                        patch(
-                                "/reviews/{reviewId}",
-                                reviewId
-                        )
+                        patch("/api/reviews/{reviewId}", reviewId)
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        objectMapper.writeValueAsString(
-                                                request
-                                        )
-                                )
+                                .content(objectMapper.writeValueAsString(request))
                 )
                 .andExpect(status().isOk())
-                .andExpect(
-                        jsonPath("$.id")
-                                .value(reviewId.toString())
-                )
-                .andExpect(
-                        jsonPath("$.rating")
-                                .value(5.0)
-                )
-                .andExpect(
-                        jsonPath("$.text")
-                                .value("수정된 리뷰")
-                );
+                .andExpect(jsonPath("$.id").value(reviewId.toString()))
+                .andExpect(jsonPath("$.rating").value(5.0))
+                .andExpect(jsonPath("$.text").value("수정된 리뷰"));
     }
 
     @Test
@@ -301,27 +251,15 @@ class ReviewControllerTest {
                 eq(currentUserId),
                 eq(reviewId),
                 any(ReviewUpdateRequest.class)
-        )).thenThrow(
-                new ReviewAccessDeniedException()
-        );
+        )).thenThrow(new ReviewAccessDeniedException());
 
         mockMvc.perform(
-                        patch(
-                                "/reviews/{reviewId}",
-                                reviewId
-                        )
+                        patch("/api/reviews/{reviewId}", reviewId)
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        objectMapper.writeValueAsString(
-                                                request
-                                        )
-                                )
+                                .content(objectMapper.writeValueAsString(request))
                 )
                 .andExpect(status().isForbidden())
-                .andExpect(
-                        jsonPath("$.code")
-                                .value("REVIEW_003")
-                );
+                .andExpect(jsonPath("$.code").value("REVIEW_003"));
     }
 
     @Test
@@ -329,12 +267,7 @@ class ReviewControllerTest {
     void deleteReviewSuccess() throws Exception {
         UUID reviewId = UUID.randomUUID();
 
-        mockMvc.perform(
-                        delete(
-                                "/reviews/{reviewId}",
-                                reviewId
-                        )
-                )
+        mockMvc.perform(delete("/api/reviews/{reviewId}", reviewId))
                 .andExpect(status().isNoContent());
 
         verify(reviewService).deleteReview(
@@ -355,16 +288,39 @@ class ReviewControllerTest {
                         reviewId
                 );
 
-        mockMvc.perform(
-                        delete(
-                                "/reviews/{reviewId}",
-                                reviewId
-                        )
-                )
+        mockMvc.perform(delete("/api/reviews/{reviewId}", reviewId))
                 .andExpect(status().isForbidden())
-                .andExpect(
-                        jsonPath("$.code")
-                                .value("REVIEW_003")
-                );
+                .andExpect(jsonPath("$.code").value("REVIEW_003"));
+    }
+
+    private ReviewResponse createResponse(
+            UUID reviewId,
+            UUID contentId
+    ) {
+        return new ReviewResponse(
+                reviewId,
+                contentId,
+                new ReviewAuthorResponse(
+                        UUID.randomUUID(),
+                        "리뷰 작성자",
+                        null
+                ),
+                new BigDecimal("4.5"),
+                "테스트 리뷰",
+                LocalDateTime.of(
+                        2026,
+                        9,
+                        9,
+                        12,
+                        0
+                ),
+                LocalDateTime.of(
+                        2026,
+                        9,
+                        9,
+                        12,
+                        0
+                )
+        );
     }
 }
