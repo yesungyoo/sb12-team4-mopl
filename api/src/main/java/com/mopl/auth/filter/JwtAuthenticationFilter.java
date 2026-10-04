@@ -96,15 +96,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 		securityContextRepository.saveContext(context, request, response);
     }
 
-    private Optional<String> extractAccessToken(HttpServletRequest request) {
-        if (request.getCookies() == null) {
-            return Optional.empty();
-        }
-        for (Cookie cookie : request.getCookies()) {
-            if (AuthCookies.ACCESS_TOKEN.equals(cookie.getName())) {
-                return Optional.of(cookie.getValue());
-            }
-        }
-        return Optional.empty();
+  private Optional<String> extractAccessToken(HttpServletRequest request) {
+    String authHeader = request.getHeader("Authorization");
+    if (authHeader != null && authHeader.startsWith("Bearer ")) {
+      return Optional.of(authHeader.substring(7));
     }
+
+    if (request.getCookies() == null) {
+      return Optional.empty();
+    }
+    for (Cookie cookie : request.getCookies()) {
+      if (AuthCookies.ACCESS_TOKEN.equals(cookie.getName())) {
+        return Optional.of(cookie.getValue());
+      }
+    }
+    return Optional.empty();
+  }
 }
