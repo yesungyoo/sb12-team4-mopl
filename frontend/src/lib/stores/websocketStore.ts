@@ -26,7 +26,7 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
 
     set({ isConnecting: true });
 
-    const BASE_URL = import.meta.env.VITE_PUBLIC_PATH || '';
+    const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
     const socket = new SockJS(`${BASE_URL}/ws`);
     const client = new Client({
       webSocketFactory: () => socket,

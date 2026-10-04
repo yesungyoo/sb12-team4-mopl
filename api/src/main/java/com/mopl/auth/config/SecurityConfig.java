@@ -11,6 +11,7 @@ import com.mopl.infrastructure.security.jwt.JwtProperties;
 import com.mopl.infrastructure.security.jwt.JwtTokenProvider;
 import com.mopl.auth.provider.EmailPasswordAuthenticationProvider;
 import com.mopl.auth.redis.TokenRedisService;
+import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -31,6 +32,9 @@ import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
 @EnableWebSecurity
@@ -51,33 +55,67 @@ public class SecurityConfig {
     private final ObjectMapper objectMapper;
 
     @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        // JWT 를 쿠키로 주고받으므로 allowCredentials=true 가 필요하고,
+        // 그 경우 allowedOrigins 에 "*" 를 쓸 수 없어 명시적으로 나열한다.
+        configuration.setAllowedOrigins(List.of(
+                "http://localhost:5173",
+                "http://mopl-frontend-site.s3-website.ap-northeast-2.amazonaws.com"
+        ));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("X-XSRF-TOKEN"));
+        configuration.setAllowCredentials(true);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+
+    private CookieCsrfTokenRepository cookieCsrfTokenRepository() {
+        CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
+        // 프론트(S3)와 API(CloudFront)가 서로 다른 site라, XSRF-TOKEN 쿠키도
+        // SameSite=None; Secure 로 내려줘야 cross-site 요청에서 브라우저가 저장/전송한다.
+        repository.setCookieCustomizer(cookie -> cookie.sameSite("None").secure(true));
+        return repository;
+    }
+
+    @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         // JwtAuthenticationFilter 는 @Component 가 아니라 여기서 직접 생성한다.
         // (Filter 빈으로 자동 스캔되면 @WebMvcTest slice 테스트에서 의존성을 못 찾아 컨텍스트 로딩이 깨짐)
-		SecurityContextRepository securityContextRepository =
-			new RequestAttributeSecurityContextRepository();
+                SecurityContextRepository securityContextRepository =
+                        new RequestAttributeSecurityContextRepository();
 
-		JwtAuthenticationFilter jwtAuthenticationFilter =
-			new JwtAuthenticationFilter(
-				jwtTokenProvider,
-				tokenRedisService,
-				securityContextRepository
-			);
+                JwtAuthenticationFilter jwtAuthenticationFilter =
+                        new JwtAuthenticationFilter(
+                                jwtTokenProvider,
+                                tokenRedisService,
+                                securityContextRepository
+                        );
 
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 // JWT 를 쿠키로 주고받으므로 CSRF 방어가 필요함.
                 // 쿠키 이름 XSRF-TOKEN / 헤더 이름 X-XSRF-TOKEN 은 CookieCsrfTokenRepository 기본값과 정확히 일치.
                 .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                        .csrfTokenRepository(cookieCsrfTokenRepository())
                         // 기본 핸들러(XorCsrfTokenRequestAttributeHandler)는 매 요청마다 토큰을 XOR 인코딩해서
                         // BREACH 공격을 방어하는데, 이 방식은 "쿠키의 원본 값을 그대로 헤더에 실어 보내는"
                         // 쿠키 기반 CSRF 흐름(SPA, curl 등)과 맞지 않아 정상 요청도 403으로 막힌다.
                         // 쿠키 원본 값을 그대로 비교하는 CsrfTokenRequestAttributeHandler 로 명시해야 함.
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        .ignoringRequestMatchers(
+                            "/api/users",
+                            "/api/auth/sign-in",
+                            "/api/auth/refresh",
+                            "/api/auth/reset-password"
+                        )
                 )
-				.securityContext(context -> context
-					.securityContextRepository(securityContextRepository)
-				)
+                                .securityContext(context -> context
+                                        .securityContextRepository(securityContextRepository)
+                                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(emailPasswordAuthenticationProvider)
                 .authorizeHttpRequests(auth -> auth

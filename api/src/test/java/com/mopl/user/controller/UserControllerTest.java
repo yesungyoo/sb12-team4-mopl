@@ -76,16 +76,29 @@ class UserControllerTest {
     private OAuth2LoginHandler oAuth2LoginHandler;
 
     @Test
-    @DisplayName("CSRF 토큰 없이 회원가입을 요청하면 403을 반환한다")
-    void signUpWithoutCsrfReturnsForbidden() throws Exception {
+    @DisplayName("CSRF 토큰 없이도 회원가입에 성공한다")
+    void signUpWithoutCsrfReturnsCreated() throws Exception {
         UserCreateRequest request = new UserCreateRequest("홍길동", "test@mopl.com", "password123");
+        UserResponse response = new UserResponse(
+            UUID.randomUUID(),
+            LocalDateTime.now(),
+            "test@mopl.com",
+            "홍길동",
+            null,
+            UserRole.USER,
+            false
+        );
+
+        when(userService.signUp(any(UserCreateRequest.class))).thenReturn(response);
 
         mockMvc.perform(
-                        post("/api/users")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(objectMapper.writeValueAsString(request))
-                )
-                .andExpect(status().isForbidden());
+                post("/api/users")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request))
+            )
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.email").value("test@mopl.com"))
+            .andExpect(jsonPath("$.name").value("홍길동"));
     }
 
     @Test
