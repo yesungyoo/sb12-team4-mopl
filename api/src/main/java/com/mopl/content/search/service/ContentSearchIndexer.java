@@ -1,17 +1,5 @@
 package com.mopl.content.search.service;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
-import org.springframework.stereotype.Service;
-
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.repository.ContentViewRepository;
@@ -22,8 +10,19 @@ import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.review.repository.ReviewRepository;
 import com.mopl.review.repository.projection.ContentReviewStatisticsProjection;
-
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.IndexOperations;
+import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
@@ -35,13 +34,12 @@ public class ContentSearchIndexer {
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
     private final ContentEmbeddingService contentEmbeddingService;
-
     private final ReviewRepository reviewRepository;
     private final ContentViewRepository contentViewRepository;
+    private final ElasticsearchOperations elasticsearchOperations;
 
     public long reindexAll() {
-        // TODO 운영 환경 재색인 시 신규 인덱스 생성 후 alias swap 방식으로 전환
-        contentSearchRepository.deleteAll();
+        recreateIndex();
 
         int pageNumber = 0;
         long indexedCount = 0;
@@ -58,12 +56,14 @@ public class ContentSearchIndexer {
 
             List<Content> contents = contentPage.getContent();
 
-            Map<UUID, List<ContentTag>> tagsByContentId = findTagsByContentId(contents);
+            Map<UUID, List<ContentTag>> tagsByContentId =
+                    findTagsByContentId(contents);
 
             Map<UUID, ContentReviewStatisticsProjection> reviewStatisticsByContentId =
                     findReviewStatisticsByContentId(contents);
 
-            Map<UUID, Long> watcherCountByContentId = findWatcherCountByContentId(contents);
+            Map<UUID, Long> watcherCountByContentId =
+                    findWatcherCountByContentId(contents);
 
             List<ContentSearchDocument> documents = contents.stream()
                     .map(content -> createDocument(
@@ -95,7 +95,8 @@ public class ContentSearchIndexer {
         List<ContentTag> contentTags =
                 contentTagRepository.findAllByContentId(content.getId());
 
-        SearchStatistics statistics = findStatistics(content.getId());
+        SearchStatistics statistics =
+                findStatistics(content.getId());
 
         ContentSearchDocument document = createDocument(
                 content,
@@ -109,7 +110,8 @@ public class ContentSearchIndexer {
     public void updateStatistics(UUID contentId) {
         contentSearchRepository.findById(contentId.toString())
                 .ifPresent(document -> {
-                    SearchStatistics statistics = findStatistics(contentId);
+                    SearchStatistics statistics =
+                            findStatistics(contentId);
 
                     document.updateStatistics(
                             statistics.averageRating(),
@@ -125,7 +127,22 @@ public class ContentSearchIndexer {
         contentSearchRepository.deleteById(contentId.toString());
     }
 
-    private Map<UUID, List<ContentTag>> findTagsByContentId(List<Content> contents) {
+    private void recreateIndex() {
+        IndexOperations indexOperations =
+                elasticsearchOperations.indexOps(
+                        ContentSearchDocument.class
+                );
+
+        if (indexOperations.exists()) {
+            indexOperations.delete();
+        }
+
+        indexOperations.createWithMapping();
+    }
+
+    private Map<UUID, List<ContentTag>> findTagsByContentId(
+            List<Content> contents
+    ) {
         if (contents.isEmpty()) {
             return Map.of();
         }
@@ -134,7 +151,8 @@ public class ContentSearchIndexer {
                 .map(Content::getId)
                 .toList();
 
-        return contentTagRepository.findAllByContentIds(contentIds)
+        return contentTagRepository
+                .findAllByContentIds(contentIds)
                 .stream()
                 .collect(Collectors.groupingBy(contentTag ->
                         contentTag.getContent().getId()));
@@ -160,7 +178,9 @@ public class ContentSearchIndexer {
                 ));
     }
 
-    private Map<UUID, Long> findWatcherCountByContentId(List<Content> contents) {
+    private Map<UUID, Long> findWatcherCountByContentId(
+            List<Content> contents
+    ) {
         if (contents.isEmpty()) {
             return Map.of();
         }
@@ -183,7 +203,8 @@ public class ContentSearchIndexer {
             Map<UUID, ContentReviewStatisticsProjection> reviewStatisticsByContentId,
             Map<UUID, Long> watcherCountByContentId
     ) {
-        ContentReviewStatisticsProjection reviewStatistics = reviewStatisticsByContentId.get(contentId);
+        ContentReviewStatisticsProjection reviewStatistics =
+                reviewStatisticsByContentId.get(contentId);
 
         Double averageRating = reviewStatistics == null
                 ? null
@@ -193,7 +214,11 @@ public class ContentSearchIndexer {
                 ? 0L
                 : reviewStatistics.getReviewCount();
 
-        long watcherCount = watcherCountByContentId.getOrDefault(contentId, 0L);
+        long watcherCount =
+                watcherCountByContentId.getOrDefault(
+                        contentId,
+                        0L
+                );
 
         return new SearchStatistics(
                 averageRating,
@@ -203,12 +228,14 @@ public class ContentSearchIndexer {
     }
 
     private SearchStatistics findStatistics(UUID contentId) {
-        Double averageRating = reviewRepository
-                .findAverageRatingByContentId(contentId);
+        Double averageRating =
+                reviewRepository.findAverageRatingByContentId(contentId);
 
-        long reviewCount = reviewRepository.countByContentId(contentId);
+        long reviewCount =
+                reviewRepository.countByContentId(contentId);
 
-        long watcherCount = contentViewRepository.countByContent_Id(contentId);
+        long watcherCount =
+                contentViewRepository.countByContent_Id(contentId);
 
         return new SearchStatistics(
                 averageRating,
@@ -222,7 +249,11 @@ public class ContentSearchIndexer {
             List<ContentTag> contentTags,
             SearchStatistics statistics
     ) {
-        List<Double> embedding = contentEmbeddingService.embedContent(content, contentTags);
+        List<Double> embedding =
+                contentEmbeddingService.embedContent(
+                        content,
+                        contentTags
+                );
 
         return ContentSearchDocument.from(
                 content,
@@ -234,10 +265,10 @@ public class ContentSearchIndexer {
         );
     }
 
-    // Indexer 내부에서만 사용하는 통계 값 객체
     private record SearchStatistics(
             Double averageRating,
             long reviewCount,
             long watcherCount
-    ) {}
+    ) {
+    }
 }

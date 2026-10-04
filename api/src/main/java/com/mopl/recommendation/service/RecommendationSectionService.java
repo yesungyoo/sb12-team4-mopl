@@ -13,6 +13,7 @@ import com.mopl.recommendation.dto.RecommendationSectionItem;
 import com.mopl.recommendation.dto.RecommendationSectionsResponse;
 import com.mopl.recommendation.dto.RecommendationTab;
 import com.mopl.user.repository.UserRepository;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -21,11 +22,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
-@RequiredArgsConstructor
 public class RecommendationSectionService {
 
     private static final int SECTION_SIZE = 10;
@@ -43,6 +43,37 @@ public class RecommendationSectionService {
     private final RecommendationPreferenceService recommendationPreferenceService;
     private final RecommendationSectionSearchService recommendationSectionSearchService;
     private final UserRepository userRepository;
+    private final Clock clock;
+
+    @Autowired
+    public RecommendationSectionService(
+            RecommendationService recommendationService,
+            RecommendationPreferenceService recommendationPreferenceService,
+            RecommendationSectionSearchService recommendationSectionSearchService,
+            UserRepository userRepository
+    ) {
+        this(
+                recommendationService,
+                recommendationPreferenceService,
+                recommendationSectionSearchService,
+                userRepository,
+                Clock.systemDefaultZone()
+        );
+    }
+
+    RecommendationSectionService(
+            RecommendationService recommendationService,
+            RecommendationPreferenceService recommendationPreferenceService,
+            RecommendationSectionSearchService recommendationSectionSearchService,
+            UserRepository userRepository,
+            Clock clock
+    ) {
+        this.recommendationService = recommendationService;
+        this.recommendationPreferenceService = recommendationPreferenceService;
+        this.recommendationSectionSearchService = recommendationSectionSearchService;
+        this.userRepository = userRepository;
+        this.clock = clock;
+    }
 
     public RecommendationSectionsResponse getSections(UUID userId, RecommendationTab tab) {
         if (tab == null) {
@@ -123,7 +154,7 @@ public class RecommendationSectionService {
         }
 
         LocalDateTime createdAfter =
-                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now(clock).minusDays(NEW_CONTENT_DAYS);
 
         NewSectionResult newSectionResult =
                 findNewSection(
@@ -184,22 +215,22 @@ public class RecommendationSectionService {
             RecommendationPreference preference
     ) {
         List<RecommendationSection> sections = new ArrayList<>();
-        Set<UUID> usedContentIds = new LinkedHashSet<>();
+        Set<UUID> genericNewContentIds = new LinkedHashSet<>();
 
         LocalDateTime createdAfter =
-                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now(clock).minusDays(NEW_CONTENT_DAYS);
 
         NewSectionResult newSectionResult =
                 findNewSection(
                         preference,
                         createdAfter,
-                        usedContentIds
+                        genericNewContentIds
                 );
 
         List<RecommendationSectionItem> newItems =
                 takeUnused(
                         newSectionResult.items(),
-                        usedContentIds
+                        genericNewContentIds
                 );
 
         if (!newItems.isEmpty()) {
@@ -228,23 +259,25 @@ public class RecommendationSectionService {
             }
         }
 
+        // [#98] NEW 탭에서는 전체 신규 섹션과 타입별 신규 섹션 간 중복을 허용한다.
+        // 각 타입별 섹션 내부의 contentId 중복만 독립적으로 제거한다.
         addNewTypeSection(
                 sections,
-                usedContentIds,
+                new LinkedHashSet<>(),
                 ContentType.MOVIE,
                 createdAfter
         );
 
         addNewTypeSection(
                 sections,
-                usedContentIds,
+                new LinkedHashSet<>(),
                 ContentType.TV_SERIES,
                 createdAfter
         );
 
         addNewTypeSection(
                 sections,
-                usedContentIds,
+                new LinkedHashSet<>(),
                 ContentType.SPORT,
                 createdAfter
         );
@@ -271,7 +304,7 @@ public class RecommendationSectionService {
         );
 
         LocalDateTime createdAfter =
-                LocalDateTime.now().minusDays(NEW_CONTENT_DAYS);
+                LocalDateTime.now(clock).minusDays(NEW_CONTENT_DAYS);
 
         addNewTypeSection(
                 sections,

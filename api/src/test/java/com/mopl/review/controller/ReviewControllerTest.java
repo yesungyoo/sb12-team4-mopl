@@ -2,6 +2,7 @@ package com.mopl.review.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,15 +17,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.auth.dto.AuthUser;
 import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.common.exception.review.ReviewAccessDeniedException;
-import com.mopl.common.exception.review.ReviewNotFoundException;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.review.dto.ReviewAuthorResponse;
 import com.mopl.review.dto.ReviewCreateRequest;
-import com.mopl.review.dto.ReviewListResponse;
 import com.mopl.review.dto.ReviewResponse;
 import com.mopl.review.dto.ReviewUpdateRequest;
 import com.mopl.review.service.ReviewService;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -50,10 +49,10 @@ class ReviewControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private UUID currentUserId;
-
     @MockitoBean
     private ReviewService reviewService;
+
+    private UUID currentUserId;
 
     @BeforeEach
     void setUpAuthentication() {
@@ -61,8 +60,7 @@ class ReviewControllerTest {
 
         AuthUser authUser = org.mockito.Mockito.mock(AuthUser.class);
 
-        when(authUser.userId())
-                .thenReturn(currentUserId);
+        when(authUser.userId()).thenReturn(currentUserId);
 
         UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(
@@ -71,8 +69,7 @@ class ReviewControllerTest {
                         List.of()
                 );
 
-        SecurityContextHolder.getContext()
-                .setAuthentication(authentication);
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 
     @AfterEach
@@ -81,58 +78,47 @@ class ReviewControllerTest {
     }
 
     @Test
-    @DisplayName("리뷰 단건 조회에 성공하면 200을 반환한다")
-    void getReviewSuccess() throws Exception {
-        UUID reviewId = UUID.randomUUID();
-        UUID contentId = UUID.randomUUID();
-
-        when(reviewService.getReview(reviewId))
-                .thenReturn(createResponse(reviewId, contentId));
-
-        mockMvc.perform(get("/api/reviews/{reviewId}", reviewId))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(reviewId.toString()))
-                .andExpect(jsonPath("$.contentId").value(contentId.toString()))
-                .andExpect(jsonPath("$.rating").value(4.5))
-                .andExpect(jsonPath("$.text").value("테스트 리뷰"));
-    }
-
-    @Test
-    @DisplayName("존재하지 않는 리뷰 조회 시 404를 반환한다")
-    void getReviewNotFound() throws Exception {
-        UUID reviewId = UUID.randomUUID();
-
-        when(reviewService.getReview(reviewId))
-                .thenThrow(new ReviewNotFoundException());
-
-        mockMvc.perform(get("/api/reviews/{reviewId}", reviewId))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("REVIEW_001"));
-    }
-
-    @Test
-    @DisplayName("콘텐츠별 리뷰 목록 조회에 성공하면 200을 반환한다")
+    @DisplayName("리뷰 목록 조회에 성공하면 커서 응답과 200을 반환한다")
     void getReviewsSuccess() throws Exception {
         UUID reviewId = UUID.randomUUID();
         UUID contentId = UUID.randomUUID();
 
-        ReviewListResponse response = new ReviewListResponse(
+        CursorResponse<ReviewResponse> response = CursorResponse.of(
                 List.of(createResponse(reviewId, contentId)),
-                0,
-                20,
-                1,
-                1
+                null,
+                null,
+                false,
+                1L,
+                "createdAt",
+                "DESCENDING"
         );
 
-        when(reviewService.getReviews(eq(contentId), any()))
-                .thenReturn(response);
+        when(reviewService.getReviews(
+                eq(contentId),
+                isNull(),
+                isNull(),
+                eq(20),
+                eq("createdAt"),
+                eq("DESCENDING")
+        )).thenReturn(response);
 
-        mockMvc.perform(get("/api/contents/{contentId}/reviews", contentId))
+        mockMvc.perform(
+                        get("/api/reviews")
+                                .param("contentId", contentId.toString())
+                                .param("limit", "20")
+                                .param("sortDirection", "DESCENDING")
+                                .param("sortBy", "createdAt")
+                )
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviews.length()").value(1))
-                .andExpect(jsonPath("$.page").value(0))
-                .andExpect(jsonPath("$.size").value(20))
-                .andExpect(jsonPath("$.totalElements").value(1));
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].id").value(reviewId.toString()))
+                .andExpect(jsonPath("$.data[0].contentId").value(contentId.toString()))
+                .andExpect(jsonPath("$.data[0].text").value("테스트 리뷰"))
+                .andExpect(jsonPath("$.data[0].rating").value(4.5))
+                .andExpect(jsonPath("$.hasNext").value(false))
+                .andExpect(jsonPath("$.totalCount").value(1))
+                .andExpect(jsonPath("$.sortBy").value("createdAt"))
+                .andExpect(jsonPath("$.sortDirection").value("DESCENDING"));
     }
 
     @Test
@@ -140,47 +126,76 @@ class ReviewControllerTest {
     void getReviewsContentNotFound() throws Exception {
         UUID contentId = UUID.randomUUID();
 
-        when(reviewService.getReviews(eq(contentId), any()))
-                .thenThrow(new ContentNotFoundException());
+        when(reviewService.getReviews(
+                eq(contentId),
+                isNull(),
+                isNull(),
+                eq(20),
+                eq("createdAt"),
+                eq("DESCENDING")
+        )).thenThrow(new ContentNotFoundException());
 
-        mockMvc.perform(get("/api/contents/{contentId}/reviews", contentId))
+        mockMvc.perform(
+                        get("/api/reviews")
+                                .param("contentId", contentId.toString())
+                                .param("limit", "20")
+                                .param("sortDirection", "DESCENDING")
+                                .param("sortBy", "createdAt")
+                )
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONTENT_001"));
     }
 
     @Test
-    @DisplayName("리뷰 생성에 성공하면 201을 반환한다")
+    @DisplayName("리뷰 생성에 성공하면 200을 반환한다")
     void createReviewSuccess() throws Exception {
         UUID reviewId = UUID.randomUUID();
         UUID contentId = UUID.randomUUID();
 
         ReviewCreateRequest request = new ReviewCreateRequest(
-                new BigDecimal("4.5"),
-                "테스트 리뷰"
+                contentId,
+                "테스트 리뷰",
+                new BigDecimal("4.5")
         );
 
         when(reviewService.createReview(
                 eq(currentUserId),
-                eq(contentId),
                 any(ReviewCreateRequest.class)
         )).thenReturn(createResponse(reviewId, contentId));
 
         mockMvc.perform(
-                        post("/api/contents/{contentId}/reviews", contentId)
+                        post("/api/reviews")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content(objectMapper.writeValueAsString(request))
                 )
-                .andExpect(status().isCreated())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(reviewId.toString()))
                 .andExpect(jsonPath("$.contentId").value(contentId.toString()))
-                .andExpect(jsonPath("$.rating").value(4.5))
-                .andExpect(jsonPath("$.text").value("테스트 리뷰"));
+                .andExpect(jsonPath("$.text").value("테스트 리뷰"))
+                .andExpect(jsonPath("$.rating").value(4.5));
 
         verify(reviewService).createReview(
                 eq(currentUserId),
-                eq(contentId),
                 any(ReviewCreateRequest.class)
         );
+    }
+
+    @Test
+    @DisplayName("리뷰 생성 시 콘텐츠 ID가 없으면 400을 반환한다")
+    void createReviewMissingContentId() throws Exception {
+        String request = """
+                {
+                    "text": "테스트 리뷰",
+                    "rating": 4.5
+                }
+                """;
+
+        mockMvc.perform(
+                        post("/api/reviews")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(request)
+                )
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -202,22 +217,8 @@ class ReviewControllerTest {
                         "리뷰 작성자",
                         null
                 ),
-                new BigDecimal("5.0"),
                 "수정된 리뷰",
-                LocalDateTime.of(
-                        2026,
-                        9,
-                        9,
-                        12,
-                        0
-                ),
-                LocalDateTime.of(
-                        2026,
-                        9,
-                        9,
-                        13,
-                        0
-                )
+                new BigDecimal("5.0")
         );
 
         when(reviewService.updateReview(
@@ -233,8 +234,8 @@ class ReviewControllerTest {
                 )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(reviewId.toString()))
-                .andExpect(jsonPath("$.rating").value(5.0))
-                .andExpect(jsonPath("$.text").value("수정된 리뷰"));
+                .andExpect(jsonPath("$.text").value("수정된 리뷰"))
+                .andExpect(jsonPath("$.rating").value(5.0));
     }
 
     @Test
@@ -305,22 +306,8 @@ class ReviewControllerTest {
                         "리뷰 작성자",
                         null
                 ),
-                new BigDecimal("4.5"),
                 "테스트 리뷰",
-                LocalDateTime.of(
-                        2026,
-                        9,
-                        9,
-                        12,
-                        0
-                ),
-                LocalDateTime.of(
-                        2026,
-                        9,
-                        9,
-                        12,
-                        0
-                )
+                new BigDecimal("4.5")
         );
     }
 }

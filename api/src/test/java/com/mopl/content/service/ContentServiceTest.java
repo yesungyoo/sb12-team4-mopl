@@ -1,19 +1,32 @@
 package com.mopl.content.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.*;
+import com.mopl.content.dto.ContentCreateRequest;
+import com.mopl.content.dto.ContentListItemResponse;
+import com.mopl.content.dto.ContentResponse;
+import com.mopl.content.dto.ContentSearchCondition;
+import com.mopl.content.dto.ContentUpdateRequest;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.repository.ContentTagRepository;
+import com.mopl.content.repository.ContentViewRepository;
 import com.mopl.content.search.service.ContentSearchService;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
-
+import com.mopl.core.domain.content.entity.ContentTag;
+import com.mopl.review.repository.ReviewRepository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,17 +36,20 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
 @ExtendWith(MockitoExtension.class)
 class ContentServiceTest {
 
     @Mock
     private ContentRepository contentRepository;
+
+    @Mock
+    private ContentTagRepository contentTagRepository;
+
+    @Mock
+    private ContentViewRepository contentViewRepository;
+
+    @Mock
+    private ReviewRepository reviewRepository;
 
     @Mock
     private ContentSearchService contentSearchService;
@@ -47,27 +63,77 @@ class ContentServiceTest {
     void setUp() {
         contentService = new ContentService(
                 contentRepository,
+                contentTagRepository,
+                contentViewRepository,
+                reviewRepository,
                 contentSearchService,
                 eventPublisher
         );
     }
 
     @Test
-    @DisplayName("콘텐츠 ID로 삭제되지 않은 콘텐츠를 조회한다")
+    @DisplayName("콘텐츠 ID로 삭제되지 않은 콘텐츠와 상세 통계를 조회한다")
     void getContentSuccess() {
         UUID contentId = UUID.randomUUID();
         Content content = createContent("테스트 영화");
 
+        ContentTag firstTag = mock(ContentTag.class);
+        ContentTag secondTag = mock(ContentTag.class);
+
+        when(firstTag.getValue()).thenReturn("SF");
+        when(secondTag.getValue()).thenReturn("DRAMA");
+
         when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
                 .thenReturn(Optional.of(content));
+        when(contentTagRepository.findAllByContentId(contentId))
+                .thenReturn(List.of(firstTag, secondTag));
+        when(reviewRepository.findAverageRatingByContentId(contentId))
+                .thenReturn(4.5);
+        when(reviewRepository.countByContentId(contentId))
+                .thenReturn(10L);
+        when(contentViewRepository.countByContent_Id(contentId))
+                .thenReturn(20L);
 
         ContentResponse response = contentService.getContent(contentId);
 
         assertThat(response.title()).isEqualTo("테스트 영화");
         assertThat(response.type()).isEqualTo(ContentType.MOVIE);
+        assertThat(response.tags()).containsExactly("SF", "DRAMA");
+        assertThat(response.averageRating()).isEqualTo(4.5);
+        assertThat(response.reviewCount()).isEqualTo(10L);
+        assertThat(response.watcherCount()).isEqualTo(20L);
         assertThat(response.externalSource()).isEqualTo(ExternalSource.MANUAL);
 
         verify(contentRepository).findByIdAndDeletedAtIsNull(contentId);
+        verify(contentTagRepository).findAllByContentId(contentId);
+        verify(reviewRepository).findAverageRatingByContentId(contentId);
+        verify(reviewRepository).countByContentId(contentId);
+        verify(contentViewRepository).countByContent_Id(contentId);
+    }
+
+    @Test
+    @DisplayName("태그와 통계가 없는 콘텐츠는 빈 태그와 0 값을 반환한다")
+    void getContentReturnsEmptyTagsAndZeroStatistics() {
+        UUID contentId = UUID.randomUUID();
+        Content content = createContent("통계 없는 영화");
+
+        when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
+                .thenReturn(Optional.of(content));
+        when(contentTagRepository.findAllByContentId(contentId))
+                .thenReturn(List.of());
+        when(reviewRepository.findAverageRatingByContentId(contentId))
+                .thenReturn(null);
+        when(reviewRepository.countByContentId(contentId))
+                .thenReturn(0L);
+        when(contentViewRepository.countByContent_Id(contentId))
+                .thenReturn(0L);
+
+        ContentResponse response = contentService.getContent(contentId);
+
+        assertThat(response.tags()).isEmpty();
+        assertThat(response.averageRating()).isZero();
+        assertThat(response.reviewCount()).isZero();
+        assertThat(response.watcherCount()).isZero();
     }
 
     @Test
@@ -97,7 +163,7 @@ class ContentServiceTest {
                 List.of()
         );
 
-        ContentListItemResponse firstContent = firstContent = new ContentListItemResponse(
+        ContentListItemResponse firstContent = new ContentListItemResponse(
                 UUID.randomUUID(),
                 ContentType.MOVIE,
                 "테스트 영화 A",
@@ -157,7 +223,6 @@ class ContentServiceTest {
                 .isEqualTo("테스트 영화 A");
         assertThat(response.data().get(1).title())
                 .isEqualTo("테스트 영화 B");
-
         assertThat(response.hasNext()).isFalse();
         assertThat(response.totalCount()).isEqualTo(2L);
         assertThat(response.sortBy()).isEqualTo("createdAt");
@@ -203,6 +268,10 @@ class ContentServiceTest {
         assertThat(savedContent.getExternalVoteCount()).isNull();
 
         assertThat(response.externalSource()).isEqualTo(ExternalSource.MANUAL);
+        assertThat(response.tags()).isEmpty();
+        assertThat(response.averageRating()).isZero();
+        assertThat(response.reviewCount()).isZero();
+        assertThat(response.watcherCount()).isZero();
     }
 
     @Test
@@ -221,6 +290,8 @@ class ContentServiceTest {
 
         when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
                 .thenReturn(Optional.of(content));
+        when(contentTagRepository.findAllByContentId(contentId))
+                .thenReturn(List.of());
 
         ContentResponse response = contentService.updateContent(
                 contentId,

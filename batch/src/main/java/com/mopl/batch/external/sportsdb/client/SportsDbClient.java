@@ -1,5 +1,6 @@
 package com.mopl.batch.external.sportsdb.client;
 
+import com.mopl.batch.external.sportsdb.dto.SportsDbEventLookupResponse;
 import com.mopl.batch.external.sportsdb.dto.SportsDbEventsResponse;
 import java.time.LocalDate;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -38,5 +39,15 @@ public class SportsDbClient {
                         .build())
                 .retrieve()
                 .body(SportsDbEventsResponse.class);
+    }
+
+    public SportsDbEventLookupResponse getEventById(String externalId) {
+        return restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/lookupevent.php")
+                        .queryParam("id", externalId)
+                        .build())
+                .retrieve()
+                .body(SportsDbEventLookupResponse.class);
     }
 }

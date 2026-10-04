@@ -1,20 +1,27 @@
 package com.mopl.content.service;
 
 import com.mopl.common.exception.content.ContentNotFoundException;
-import com.mopl.content.dto.*;
+import com.mopl.content.dto.ContentCreateRequest;
+import com.mopl.content.dto.ContentListItemResponse;
+import com.mopl.content.dto.ContentResponse;
+import com.mopl.content.dto.ContentSearchCondition;
+import com.mopl.content.dto.ContentUpdateRequest;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.repository.ContentTagRepository;
+import com.mopl.content.repository.ContentViewRepository;
 import com.mopl.content.search.event.ContentSearchSyncEvent;
 import com.mopl.content.search.service.ContentSearchService;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
+import com.mopl.core.domain.content.entity.ContentTag;
+import com.mopl.review.repository.ReviewRepository;
+import java.util.List;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -22,18 +29,19 @@ import java.util.UUID;
 public class ContentService {
 
     private final ContentRepository contentRepository;
+    private final ContentTagRepository contentTagRepository;
+    private final ContentViewRepository contentViewRepository;
+    private final ReviewRepository reviewRepository;
     private final ContentSearchService contentSearchService;
     private final ApplicationEventPublisher eventPublisher;
 
-    // 단건 조회
     public ContentResponse getContent(UUID contentId) {
         Content content = contentRepository.findByIdAndDeletedAtIsNull(contentId)
                 .orElseThrow(ContentNotFoundException::new);
 
-        return ContentResponse.from(content);
+        return toResponse(content, contentId);
     }
 
-    // 목록 조회
     public CursorResponse<ContentListItemResponse> getContents(
             ContentSearchCondition condition,
             String cursor,
@@ -52,7 +60,6 @@ public class ContentService {
         );
     }
 
-    // 콘텐츠 등록 (관리자 전용)
     @Transactional
     public ContentResponse createContent(ContentCreateRequest request) {
         Content content = new Content(
@@ -74,10 +81,9 @@ public class ContentService {
                 new ContentSearchSyncEvent(savedContent.getId(), false)
         );
 
-        return ContentResponse.from(savedContent);
+        return toResponse(savedContent, savedContent.getId());
     }
 
-    // 콘텐츠 수정
     @Transactional
     public ContentResponse updateContent(UUID contentId, ContentUpdateRequest request) {
         Content content = contentRepository.findByIdAndDeletedAtIsNull(contentId)
@@ -95,7 +101,7 @@ public class ContentService {
                 new ContentSearchSyncEvent(content.getId(), false)
         );
 
-        return ContentResponse.from(content);
+        return toResponse(content, contentId);
     }
 
     @Transactional
@@ -107,6 +113,30 @@ public class ContentService {
 
         eventPublisher.publishEvent(
                 new ContentSearchSyncEvent(content.getId(), true)
+        );
+    }
+
+    private ContentResponse toResponse(Content content, UUID contentId) {
+        if (contentId == null) {
+            return ContentResponse.from(content);
+        }
+
+        List<String> tags = contentTagRepository.findAllByContentId(contentId)
+                .stream()
+                .map(ContentTag::getValue)
+                .distinct()
+                .toList();
+
+        Double averageRating = reviewRepository.findAverageRatingByContentId(contentId);
+        long reviewCount = reviewRepository.countByContentId(contentId);
+        long watcherCount = contentViewRepository.countByContent_Id(contentId);
+
+        return ContentResponse.from(
+                content,
+                tags,
+                averageRating,
+                reviewCount,
+                watcherCount
         );
     }
 }

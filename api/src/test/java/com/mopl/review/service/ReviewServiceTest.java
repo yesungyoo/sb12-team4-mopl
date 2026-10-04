@@ -8,46 +8,42 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
-import com.mopl.content.search.event.ContentSearchStatisticsSyncEvent;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-
 import com.mopl.common.exception.MoplException;
 import com.mopl.common.exception.content.ContentNotFoundException;
 import com.mopl.common.exception.review.ReviewAccessDeniedException;
 import com.mopl.common.exception.review.ReviewAlreadyExistsException;
-import com.mopl.common.exception.review.ReviewNotFoundException;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.event.ContentSearchStatisticsSyncEvent;
+import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.common.event.FollowingReviewCreatedEvent;
+import com.mopl.core.common.event.RecommendationPreferenceChangedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.review.entity.Review;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.review.dto.ReviewCreateRequest;
-import com.mopl.review.dto.ReviewListResponse;
 import com.mopl.review.dto.ReviewResponse;
 import com.mopl.review.dto.ReviewUpdateRequest;
 import com.mopl.review.repository.ReviewRepository;
 import com.mopl.user.repository.FollowRepository;
 import com.mopl.user.repository.UserRepository;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 
 @ExtendWith(MockitoExtension.class)
-public class ReviewServiceTest {
+class ReviewServiceTest {
 
     @Mock
     private ReviewRepository reviewRepository;
@@ -68,48 +64,9 @@ public class ReviewServiceTest {
     private ReviewService reviewService;
 
     @Test
-    @DisplayName("리뷰 단건 조회에 성공한다.")
-    void getReviewSuccess() {
-        UUID reviewId = UUID.randomUUID();
-        UUID userId = UUID.randomUUID();
-        UUID contentId = UUID.randomUUID();
-
-        Review review = createReview(
-                reviewId,
-                userId,
-                contentId,
-                "리뷰 내용"
-        );
-
-        when(reviewRepository.findById(reviewId))
-                .thenReturn(Optional.of(review));
-
-        ReviewResponse response = reviewService.getReview(reviewId);
-
-        assertThat(response.id()).isEqualTo(reviewId);
-        assertThat(response.contentId()).isEqualTo(contentId);
-        assertThat(response.author().id()).isEqualTo(userId);
-        assertThat(response.rating()).isEqualByComparingTo("4.5");
-        assertThat(response.text()).isEqualTo("리뷰 내용");
-    }
-
-    @Test
-    @DisplayName("존재하지 않는 리뷰 조회 시 예외가 발생한다")
-    void getReviewNotFound() {
-        UUID reviewId = UUID.randomUUID();
-
-        when(reviewRepository.findById(reviewId))
-                .thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> reviewService.getReview(reviewId))
-                .isInstanceOf(ReviewNotFoundException.class);
-    }
-
-    @Test
-    @DisplayName("콘텐츠별 리뷰 목록을 조회한다")
+    @DisplayName("콘텐츠별 리뷰 목록을 커서 방식으로 조회한다")
     void getReviewsSuccess() {
         UUID contentId = UUID.randomUUID();
-        Pageable pageable = PageRequest.of(0, 20);
 
         Review firstReview = createReview(
                 UUID.randomUUID(),
@@ -125,41 +82,160 @@ public class ReviewServiceTest {
                 "두 번째 리뷰"
         );
 
-        Page<Review> reviewPage = new PageImpl<>(
-                List.of(firstReview, secondReview),
-                pageable,
-                2
-        );
-
         when(contentRepository.existsByIdAndDeletedAtIsNull(contentId))
                 .thenReturn(true);
 
-        when(reviewRepository.findAllByContentId(contentId, pageable))
-                .thenReturn(reviewPage);
+        when(reviewRepository.count(anySpecification()))
+                .thenReturn(2L);
 
-        ReviewListResponse response = reviewService.getReviews(
-                contentId,
-                pageable
+        when(reviewRepository.findAll(
+                anySpecification(),
+                any(Pageable.class)
+        )).thenReturn(
+                new PageImpl<>(List.of(firstReview, secondReview))
         );
 
-        assertThat(response.reviews()).hasSize(2);
-        assertThat(response.page()).isZero();
-        assertThat(response.size()).isEqualTo(20);
-        assertThat(response.totalElements()).isEqualTo(2);
-        assertThat(response.totalPages()).isEqualTo(1);
+        CursorResponse<ReviewResponse> response = reviewService.getReviews(
+                contentId,
+                null,
+                null,
+                20,
+                "createdAt",
+                "DESCENDING"
+        );
+
+        assertThat(response.data()).hasSize(2);
+        assertThat(response.totalCount()).isEqualTo(2L);
+        assertThat(response.hasNext()).isFalse();
+        assertThat(response.nextCursor()).isNull();
+        assertThat(response.nextIdAfter()).isNull();
+        assertThat(response.sortBy()).isEqualTo("createdAt");
+        assertThat(response.sortDirection()).isEqualTo("DESCENDING");
     }
 
     @Test
-    @DisplayName("존재하지 않거나 삭제된 콘텐츠의 리뷰 목록 조회 시 예외가 발생한다")
+    @DisplayName("다음 리뷰가 있으면 마지막 리뷰 기준 커서를 반환한다")
+    void getReviewsReturnsNextCursor() {
+        UUID firstReviewId = UUID.randomUUID();
+        UUID contentId = UUID.randomUUID();
+
+        Review firstReview = createReview(
+                firstReviewId,
+                UUID.randomUUID(),
+                contentId,
+                "첫 번째 리뷰"
+        );
+
+        when(firstReview.getCreatedAt())
+                .thenReturn(
+                        LocalDateTime.of(
+                                2026,
+                                9,
+                                9,
+                                12,
+                                0
+                        )
+                );
+
+        Review secondReview = mock(Review.class);
+
+        when(reviewRepository.count(anySpecification()))
+                .thenReturn(2L);
+
+        when(reviewRepository.findAll(
+                anySpecification(),
+                any(Pageable.class)
+        )).thenReturn(
+                new PageImpl<>(List.of(firstReview, secondReview))
+        );
+
+        CursorResponse<ReviewResponse> response = reviewService.getReviews(
+                null,
+                null,
+                null,
+                1,
+                "createdAt",
+                "DESCENDING"
+        );
+
+        assertThat(response.data()).hasSize(1);
+        assertThat(response.hasNext()).isTrue();
+        assertThat(response.nextCursor())
+                .isEqualTo("2026-09-09T12:00");
+        assertThat(response.nextIdAfter())
+                .isEqualTo(firstReviewId.toString());
+    }
+
+    @Test
+    @DisplayName("평점 정렬에서는 평점 값을 다음 커서로 반환한다")
+    void getReviewsReturnsRatingCursor() {
+        UUID firstReviewId = UUID.randomUUID();
+        UUID contentId = UUID.randomUUID();
+
+        Review firstReview = createReview(
+                firstReviewId,
+                UUID.randomUUID(),
+                contentId,
+                "첫 번째 리뷰"
+        );
+
+        Review secondReview = mock(Review.class);
+
+        when(reviewRepository.count(anySpecification()))
+                .thenReturn(2L);
+
+        when(reviewRepository.findAll(
+                anySpecification(),
+                any(Pageable.class)
+        )).thenReturn(
+                new PageImpl<>(List.of(firstReview, secondReview))
+        );
+
+        CursorResponse<ReviewResponse> response = reviewService.getReviews(
+                null,
+                null,
+                null,
+                1,
+                "rating",
+                "DESCENDING"
+        );
+
+        assertThat(response.data()).hasSize(1);
+        assertThat(response.hasNext()).isTrue();
+        assertThat(response.nextCursor()).isEqualTo("4.5");
+        assertThat(response.nextIdAfter())
+                .isEqualTo(firstReviewId.toString());
+    }
+
+    @Test
+    @DisplayName("존재하지 않거나 삭제된 콘텐츠의 리뷰 목록은 조회할 수 없다")
     void getReviewsContentNotFound() {
         UUID contentId = UUID.randomUUID();
-        Pageable pageable = PageRequest.of(0, 20);
 
         when(contentRepository.existsByIdAndDeletedAtIsNull(contentId))
                 .thenReturn(false);
 
-        assertThatThrownBy(() -> reviewService.getReviews(contentId, pageable))
-                .isInstanceOf(ContentNotFoundException.class);
+        assertThatThrownBy(() -> reviewService.getReviews(
+                contentId,
+                null,
+                null,
+                20,
+                "createdAt",
+                "DESCENDING"
+        )).isInstanceOf(ContentNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("cursor와 idAfter 중 하나만 전달하면 조회할 수 없다")
+    void getReviewsInvalidCursorPair() {
+        assertThatThrownBy(() -> reviewService.getReviews(
+                null,
+                "2026-09-09T12:00",
+                null,
+                20,
+                "createdAt",
+                "DESCENDING"
+        )).isInstanceOf(MoplException.class);
     }
 
     @Test
@@ -175,8 +251,9 @@ public class ReviewServiceTest {
         Content content = mock(Content.class);
 
         ReviewCreateRequest request = new ReviewCreateRequest(
-                new BigDecimal("4.5"),
-                "좋은 콘텐츠입니다."
+                contentId,
+                "좋은 콘텐츠입니다.",
+                new BigDecimal("4.5")
         );
 
         Review savedReview = createReview(
@@ -216,7 +293,6 @@ public class ReviewServiceTest {
 
         ReviewResponse response = reviewService.createReview(
                 userId,
-                contentId,
                 request
         );
 
@@ -225,24 +301,22 @@ public class ReviewServiceTest {
 
         verify(reviewRepository).save(any(Review.class));
 
-        ArgumentCaptor<FollowingReviewCreatedEvent> eventCaptor =
-                ArgumentCaptor.forClass(
-                        FollowingReviewCreatedEvent.class
-                );
-
         verify(eventPublisher).publishEvent(
-                eventCaptor.capture()
+                org.mockito.ArgumentMatchers.<Object>argThat(event ->
+                        event instanceof FollowingReviewCreatedEvent followingEvent
+                                && followingEvent.followerIds().equals(List.of(followerId))
+                                && followingEvent.reviewerName().equals("리뷰작성자")
+                                && followingEvent.contentTitle().equals("테스트 콘텐츠")
+                )
         );
 
-        FollowingReviewCreatedEvent event =
-                eventCaptor.getValue();
+        verify(eventPublisher).publishEvent(
+                new ContentSearchStatisticsSyncEvent(contentId)
+        );
 
-        assertThat(event.followerIds())
-                .containsExactly(followerId);
-        assertThat(event.reviewerName())
-                .isEqualTo("리뷰작성자");
-        assertThat(event.contentTitle())
-                .isEqualTo("테스트 콘텐츠");
+        verify(eventPublisher).publishEvent(
+                new RecommendationPreferenceChangedEvent(userId)
+        );
     }
 
     @Test
@@ -255,8 +329,9 @@ public class ReviewServiceTest {
         Content content = mock(Content.class);
 
         ReviewCreateRequest request = new ReviewCreateRequest(
-                new BigDecimal("4.0"),
-                "중복 리뷰"
+                contentId,
+                "중복 리뷰",
+                new BigDecimal("4.0")
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
@@ -273,13 +348,9 @@ public class ReviewServiceTest {
         assertThatThrownBy(
                 () -> reviewService.createReview(
                         userId,
-                        contentId,
                         request
                 )
-        )
-                .isInstanceOf(
-                        ReviewAlreadyExistsException.class
-                );
+        ).isInstanceOf(ReviewAlreadyExistsException.class);
 
         verify(reviewRepository, never())
                 .save(any(Review.class));
@@ -295,8 +366,9 @@ public class ReviewServiceTest {
         UUID contentId = UUID.randomUUID();
 
         ReviewCreateRequest request = new ReviewCreateRequest(
-                new BigDecimal("4.0"),
-                "리뷰"
+                contentId,
+                "리뷰",
+                new BigDecimal("4.0")
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
@@ -305,11 +377,9 @@ public class ReviewServiceTest {
         assertThatThrownBy(
                 () -> reviewService.createReview(
                         userId,
-                        contentId,
                         request
                 )
-        )
-                .isInstanceOf(MoplException.class);
+        ).isInstanceOf(MoplException.class);
     }
 
     @Test
@@ -321,8 +391,9 @@ public class ReviewServiceTest {
         User user = mock(User.class);
 
         ReviewCreateRequest request = new ReviewCreateRequest(
-                new BigDecimal("4.0"),
-                "리뷰"
+                contentId,
+                "리뷰",
+                new BigDecimal("4.0")
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId))
@@ -334,11 +405,9 @@ public class ReviewServiceTest {
         assertThatThrownBy(
                 () -> reviewService.createReview(
                         userId,
-                        contentId,
                         request
                 )
-        )
-                .isInstanceOf(ContentNotFoundException.class);
+        ).isInstanceOf(ContentNotFoundException.class);
     }
 
     @Test
@@ -378,6 +447,14 @@ public class ReviewServiceTest {
         );
 
         assertThat(response.id()).isEqualTo(reviewId);
+
+        verify(eventPublisher).publishEvent(
+                new ContentSearchStatisticsSyncEvent(contentId)
+        );
+
+        verify(eventPublisher).publishEvent(
+                new RecommendationPreferenceChangedEvent(userId)
+        );
     }
 
     @Test
@@ -405,10 +482,7 @@ public class ReviewServiceTest {
                         reviewId,
                         request
                 )
-        )
-                .isInstanceOf(
-                        ReviewAccessDeniedException.class
-                );
+        ).isInstanceOf(ReviewAccessDeniedException.class);
 
         verify(review, never())
                 .update(any(), any());
@@ -422,7 +496,6 @@ public class ReviewServiceTest {
         UUID contentId = UUID.randomUUID();
 
         Review review = mock(Review.class);
-
         Content content = mock(Content.class);
 
         when(reviewRepository.findById(reviewId))
@@ -443,8 +516,13 @@ public class ReviewServiceTest {
         );
 
         verify(reviewRepository).delete(review);
+
         verify(eventPublisher).publishEvent(
                 new ContentSearchStatisticsSyncEvent(contentId)
+        );
+
+        verify(eventPublisher).publishEvent(
+                new RecommendationPreferenceChangedEvent(userId)
         );
     }
 
@@ -467,13 +545,15 @@ public class ReviewServiceTest {
                         currentUserId,
                         reviewId
                 )
-        )
-                .isInstanceOf(
-                        ReviewAccessDeniedException.class
-                );
+        ).isInstanceOf(ReviewAccessDeniedException.class);
 
         verify(reviewRepository, never())
                 .delete(review);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Specification<Review> anySpecification() {
+        return any(Specification.class);
     }
 
     private Review createReview(
@@ -496,29 +576,8 @@ public class ReviewServiceTest {
         when(review.getId()).thenReturn(reviewId);
         when(review.getUser()).thenReturn(user);
         when(review.getContent()).thenReturn(content);
-        when(review.getRating())
-                .thenReturn(new BigDecimal("4.5"));
+        when(review.getRating()).thenReturn(new BigDecimal("4.5"));
         when(review.getText()).thenReturn(text);
-        when(review.getCreatedAt())
-                .thenReturn(
-                        LocalDateTime.of(
-                                2026,
-                                9,
-                                9,
-                                12,
-                                0
-                        )
-                );
-        when(review.getUpdatedAt())
-                .thenReturn(
-                        LocalDateTime.of(
-                                2026,
-                                9,
-                                9,
-                                12,
-                                0
-                        )
-                );
 
         return review;
     }

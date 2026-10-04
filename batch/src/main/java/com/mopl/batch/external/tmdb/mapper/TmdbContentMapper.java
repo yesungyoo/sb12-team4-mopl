@@ -81,7 +81,7 @@ public class TmdbContentMapper {
         );
     }
 
-    private List<ExternalContentTagDto> createGenreTags(
+    public List<ExternalContentTagDto> createGenreTags(
             List<Integer> genreIds
     ) {
         if (genreIds == null || genreIds.isEmpty()) {

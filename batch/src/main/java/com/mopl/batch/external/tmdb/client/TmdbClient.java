@@ -1,5 +1,6 @@
 package com.mopl.batch.external.tmdb.client;
 
+import com.mopl.batch.external.tmdb.dto.TmdbContentDetails;
 import com.mopl.batch.external.tmdb.dto.TmdbMovieResponse;
 import com.mopl.batch.external.tmdb.dto.TmdbTvResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -37,5 +38,27 @@ public class TmdbClient {
                 )
                 .retrieve()
                 .body(TmdbTvResponse.class);
+    }
+
+    public TmdbContentDetails getMovieDetails(String externalId) {
+        return restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/3/movie/{id}")
+                        .queryParam("language", "ko-KR")
+                        .build(externalId)
+                )
+                .retrieve()
+                .body(TmdbContentDetails.class);
+    }
+
+    public TmdbContentDetails getTvDetails(String externalId) {
+        return restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/3/tv/{id}")
+                        .queryParam("language", "ko-KR")
+                        .build(externalId)
+                )
+                .retrieve()
+                .body(TmdbContentDetails.class);
     }
 }

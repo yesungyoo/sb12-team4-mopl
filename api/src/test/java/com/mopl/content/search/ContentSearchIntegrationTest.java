@@ -4,6 +4,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import com.mopl.content.dto.ContentListItemResponse;
+import com.mopl.content.dto.ContentSearchCondition;
+import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.repository.ContentTagRepository;
+import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.content.search.service.ContentSearchIndexer;
+import com.mopl.content.search.service.ContentSearchService;
+import com.mopl.core.common.dto.CursorResponse;
+import com.mopl.core.common.enums.ContentType;
+import com.mopl.core.common.enums.ExternalSource;
+import com.mopl.core.domain.content.entity.Content;
+import com.mopl.core.domain.content.entity.ContentTag;
+import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
+import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -11,35 +27,19 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
-
-import com.mopl.content.dto.ContentListItemResponse;
-import com.mopl.content.search.document.ContentSearchDocument;
-import com.mopl.core.common.dto.CursorResponse;
-import com.mopl.infrastructure.ai.client.EmbeddingClient;
-import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
-import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
-
-import com.mopl.content.dto.ContentSearchCondition;
-import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.search.repository.ContentSearchRepository;
-import com.mopl.content.search.service.ContentSearchIndexer;
-import com.mopl.content.search.service.ContentSearchService;
-import com.mopl.core.common.enums.ContentType;
-import com.mopl.core.common.enums.ExternalSource;
-import com.mopl.core.domain.content.entity.Content;
 
 @SpringBootTest(properties = {
         "spring.data.redis.host=localhost",
@@ -47,25 +47,40 @@ import com.mopl.core.domain.content.entity.Content;
         "mopl.elasticsearch.reindex-on-startup=false"
 })
 @Testcontainers
-public class ContentSearchIntegrationTest {
+class ContentSearchIntegrationTest {
 
     private static final int EMBEDDING_DIMENSIONS = 1536;
 
     @Container
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
-            .withDatabaseName("mopl")
-            .withUsername("mopl")
-            .withPassword("mopl")
-            .withStartupTimeout(Duration.ofMinutes(5));
+    static final MySQLContainer<?> MYSQL =
+            new MySQLContainer<>("mysql:8.0")
+                    .withDatabaseName("mopl")
+                    .withUsername("mopl")
+                    .withPassword("mopl")
+                    .withStartupTimeout(
+                            Duration.ofMinutes(5)
+                    );
 
     @Container
-    static final ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
-            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:8.18.8"))
-                    .withEnv("xpack.security.enabled", "false")
-                    .withStartupTimeout(Duration.ofMinutes(5));
+    static final ElasticsearchContainer ELASTICSEARCH =
+            new ElasticsearchContainer(
+                    DockerImageName.parse(
+                            "docker.elastic.co/elasticsearch/elasticsearch:8.18.8"
+                    )
+            )
+                    .withEnv(
+                            "xpack.security.enabled",
+                            "false"
+                    )
+                    .withStartupTimeout(
+                            Duration.ofMinutes(5)
+                    );
 
     @Autowired
     private ContentRepository contentRepository;
+
+    @Autowired
+    private ContentTagRepository contentTagRepository;
 
     @Autowired
     private ContentSearchRepository contentSearchRepository;
@@ -83,23 +98,50 @@ public class ContentSearchIntegrationTest {
     private EmbeddingClient embeddingClient;
 
     @DynamicPropertySource
-    static void configureProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
-        registry.add("spring.datasource.username", MYSQL::getUsername);
-        registry.add("spring.datasource.password", MYSQL::getPassword);
-        registry.add("spring.elasticsearch.uris", ELASTICSEARCH::getHttpHostAddress);
+    static void configureProperties(
+            DynamicPropertyRegistry registry
+    ) {
+        registry.add(
+                "spring.datasource.url",
+                MYSQL::getJdbcUrl
+        );
+
+        registry.add(
+                "spring.datasource.username",
+                MYSQL::getUsername
+        );
+
+        registry.add(
+                "spring.datasource.password",
+                MYSQL::getPassword
+        );
+
+        registry.add(
+                "spring.elasticsearch.uris",
+                ELASTICSEARCH::getHttpHostAddress
+        );
     }
 
     @BeforeEach
     void setUp() {
         contentSearchRepository.deleteAll();
-
         refreshSearchIndex();
 
+        contentTagRepository.deleteAllInBatch();
         contentRepository.deleteAllInBatch();
 
-        when(embeddingClient.embed(any(EmbeddingRequest.class)))
-                .thenReturn(new EmbeddingResponse(Collections.nCopies(EMBEDDING_DIMENSIONS, 0.01D)));
+        when(
+                embeddingClient.embed(
+                        any(EmbeddingRequest.class)
+                )
+        ).thenReturn(
+                new EmbeddingResponse(
+                        Collections.nCopies(
+                                EMBEDDING_DIMENSIONS,
+                                0.01D
+                        )
+                )
+        );
     }
 
     @Test
@@ -122,32 +164,415 @@ public class ContentSearchIntegrationTest {
                 new BigDecimal("7.0")
         );
 
-        contentRepository.saveAll(List.of(spiderMan, drama));
+        contentRepository.saveAll(
+                List.of(
+                        spiderMan,
+                        drama
+                )
+        );
 
-        long indexedCount = contentSearchIndexer.reindexAll();
+        long indexedCount =
+                contentSearchIndexer.reindexAll();
 
         refreshSearchIndex();
 
-        ContentSearchCondition condition = new ContentSearchCondition(
+        ContentSearchCondition condition =
+                new ContentSearchCondition(
+                        ContentType.MOVIE,
+                        "Hero",
+                        List.of()
+                );
+
+        CursorResponse<ContentListItemResponse> response =
+                contentSearchService.search(
+                        condition,
+                        null,
+                        null,
+                        10,
+                        "createdAt",
+                        "DESCENDING"
+                );
+
+        assertThat(indexedCount)
+                .isEqualTo(2);
+
+        assertThat(response.totalCount())
+                .isEqualTo(1);
+
+        assertThat(response.data())
+                .hasSize(1);
+
+        assertThat(
+                response.data()
+                        .getFirst()
+                        .title()
+        ).isEqualTo(
+                "Spider Hero"
+        );
+    }
+
+    @Test
+    void searchMatchesTitlePrefix() {
+        Content spiderMan = createContent(
                 ContentType.MOVIE,
-                "Hero",
-                List.of()
+                "스파이더맨: 브랜드 뉴 데이",
+                "새로운 스파이더맨 영화",
+                LocalDate.of(2026, 7, 29),
+                new BigDecimal("700.0"),
+                new BigDecimal("8.0")
         );
 
-        CursorResponse<ContentListItemResponse> response = contentSearchService.search(
-                condition,
-                null,
-                null,
-                10,
-                "createdAt",
-                "DESCENDING"
+        contentRepository.saveAndFlush(
+                spiderMan
         );
 
-        assertThat(indexedCount).isEqualTo(2);
-        assertThat(response.totalCount()).isEqualTo(1);
-        assertThat(response.data()).hasSize(1);
-        assertThat(response.data().getFirst().title())
-                .isEqualTo("Spider Hero");
+        contentSearchIndexer.reindexAll();
+        refreshSearchIndex();
+
+        List<String> keywords = List.of(
+                "스파",
+                "스파이더",
+                "스파이더맨",
+                "브랜드",
+                "브랜드 뉴"
+        );
+
+        for (String keyword : keywords) {
+            ContentSearchCondition condition =
+                    new ContentSearchCondition(
+                            ContentType.MOVIE,
+                            keyword,
+                            List.of()
+                    );
+
+            CursorResponse<ContentListItemResponse> response =
+                    contentSearchService.search(
+                            condition,
+                            null,
+                            null,
+                            10,
+                            "createdAt",
+                            "DESCENDING"
+                    );
+
+            assertThat(response.data())
+                    .extracting(
+                            ContentListItemResponse::id
+                    )
+                    .contains(
+                            spiderMan.getId()
+                    );
+        }
+    }
+
+    @Test
+    void searchFiltersByTagsIn() {
+        Content sfMovie = createContent(
+                ContentType.MOVIE,
+                "SF Movie",
+                "science fiction",
+                LocalDate.of(2026, 1, 1),
+                new BigDecimal("500.0"),
+                new BigDecimal("8.0")
+        );
+
+        Content dramaMovie = createContent(
+                ContentType.MOVIE,
+                "Drama Movie",
+                "drama",
+                LocalDate.of(2026, 1, 2),
+                new BigDecimal("400.0"),
+                new BigDecimal("7.0")
+        );
+
+        contentRepository.saveAndFlush(
+                sfMovie
+        );
+
+        contentRepository.saveAndFlush(
+                dramaMovie
+        );
+
+        contentTagRepository.save(
+                new ContentTag(
+                        sfMovie,
+                        "GENRE",
+                        "SF"
+                )
+        );
+
+        contentTagRepository.save(
+                new ContentTag(
+                        dramaMovie,
+                        "GENRE",
+                        "DRAMA"
+                )
+        );
+
+        contentSearchIndexer.reindexAll();
+        refreshSearchIndex();
+
+        ContentSearchCondition condition =
+                new ContentSearchCondition(
+                        ContentType.MOVIE,
+                        null,
+                        List.of("SF")
+                );
+
+        CursorResponse<ContentListItemResponse> response =
+                contentSearchService.search(
+                        condition,
+                        null,
+                        null,
+                        10,
+                        "createdAt",
+                        "DESCENDING"
+                );
+
+        assertThat(response.data())
+                .extracting(
+                        ContentListItemResponse::id
+                )
+                .containsExactly(
+                        sfMovie.getId()
+                );
+
+        assertThat(
+                response.data()
+                        .getFirst()
+                        .tags()
+        ).contains(
+                "SF"
+        );
+    }
+
+    @Test
+    void searchMatchesAnyTagsIn() {
+        Content sfMovie = createContent(
+                ContentType.MOVIE,
+                "SF Movie",
+                "science fiction",
+                LocalDate.of(2026, 1, 1),
+                new BigDecimal("500.0"),
+                new BigDecimal("8.0")
+        );
+
+        Content dramaMovie = createContent(
+                ContentType.MOVIE,
+                "Drama Movie",
+                "drama",
+                LocalDate.of(2026, 1, 2),
+                new BigDecimal("400.0"),
+                new BigDecimal("7.0")
+        );
+
+        Content actionMovie = createContent(
+                ContentType.MOVIE,
+                "Action Movie",
+                "action",
+                LocalDate.of(2026, 1, 3),
+                new BigDecimal("300.0"),
+                new BigDecimal("6.0")
+        );
+
+        contentRepository.saveAndFlush(
+                sfMovie
+        );
+
+        contentRepository.saveAndFlush(
+                dramaMovie
+        );
+
+        contentRepository.saveAndFlush(
+                actionMovie
+        );
+
+        contentTagRepository.save(
+                new ContentTag(
+                        sfMovie,
+                        "GENRE",
+                        "SF"
+                )
+        );
+
+        contentTagRepository.save(
+                new ContentTag(
+                        dramaMovie,
+                        "GENRE",
+                        "DRAMA"
+                )
+        );
+
+        contentTagRepository.save(
+                new ContentTag(
+                        actionMovie,
+                        "GENRE",
+                        "ACTION"
+                )
+        );
+
+        contentSearchIndexer.reindexAll();
+        refreshSearchIndex();
+
+        ContentSearchCondition condition =
+                new ContentSearchCondition(
+                        ContentType.MOVIE,
+                        null,
+                        List.of(
+                                "SF",
+                                "DRAMA"
+                        )
+                );
+
+        CursorResponse<ContentListItemResponse> response =
+                contentSearchService.search(
+                        condition,
+                        null,
+                        null,
+                        10,
+                        "createdAt",
+                        "DESCENDING"
+                );
+
+        assertThat(response.data())
+                .extracting(
+                        ContentListItemResponse::id
+                )
+                .containsExactlyInAnyOrder(
+                        sfMovie.getId(),
+                        dramaMovie.getId()
+                );
+    }
+
+    // [#98 추가]
+    // ES에는 남아 있지만 MySQL에서는 soft-delete된 콘텐츠가
+    // 첫 페이지에 끼어도 활성 콘텐츠로 페이지를 정상 보충한다.
+    @Test
+    void searchRefillsPageWhenElasticsearchContainsSoftDeletedContent() {
+        Content first = createContent(
+                ContentType.MOVIE,
+                "Active Movie 1",
+                "movie",
+                LocalDate.of(2026, 1, 1),
+                new BigDecimal("100.0"),
+                new BigDecimal("7.0")
+        );
+
+        Content second = createContent(
+                ContentType.MOVIE,
+                "Active Movie 2",
+                "movie",
+                LocalDate.of(2026, 1, 2),
+                new BigDecimal("200.0"),
+                new BigDecimal("8.0")
+        );
+
+        Content third = createContent(
+                ContentType.MOVIE,
+                "Stale Movie",
+                "movie",
+                LocalDate.of(2026, 1, 3),
+                new BigDecimal("300.0"),
+                new BigDecimal("9.0")
+        );
+
+        List<Content> contents =
+                contentRepository.saveAllAndFlush(
+                        List.of(
+                                first,
+                                second,
+                                third
+                        )
+                );
+
+        contentSearchIndexer.reindexAll();
+        refreshSearchIndex();
+
+        // rate는 모두 review가 없어서 0.0이고,
+        // tie-breaker가 id ASC이므로 가장 작은 id를
+        // stale 문서로 만들어 첫 hit에 위치시킨다.
+        Content staleContent =
+                contents.stream()
+                        .min(
+                                Comparator.comparing(
+                                        content ->
+                                                content.getId()
+                                                        .toString()
+                                )
+                        )
+                        .orElseThrow();
+
+        staleContent.delete();
+
+        contentRepository.saveAndFlush(
+                staleContent
+        );
+
+        List<UUID> expectedActiveIds =
+                contents.stream()
+                        .filter(content ->
+                                !content.getId()
+                                        .equals(
+                                                staleContent.getId()
+                                        )
+                        )
+                        .map(Content::getId)
+                        .sorted(
+                                Comparator.comparing(
+                                        UUID::toString
+                                )
+                        )
+                        .toList();
+
+        ContentSearchCondition condition =
+                new ContentSearchCondition(
+                        ContentType.MOVIE,
+                        null,
+                        List.of()
+                );
+
+        CursorResponse<ContentListItemResponse> response =
+                contentSearchService.search(
+                        condition,
+                        null,
+                        null,
+                        2,
+                        "rate",
+                        "ASCENDING"
+                );
+
+        assertThat(response.data())
+                .extracting(
+                        ContentListItemResponse::id
+                )
+                .containsExactlyElementsOf(
+                        expectedActiveIds
+                );
+
+        assertThat(response.data())
+                .hasSize(2);
+
+        assertThat(response.hasNext())
+                .isFalse();
+
+        assertThat(response.nextCursor())
+                .isNull();
+
+        assertThat(response.nextIdAfter())
+                .isNull();
+
+        assertThat(response.totalCount())
+                .isEqualTo(2L);
+
+        // search 중 발견한 stale ES 문서도 정리됐는지 확인
+        refreshSearchIndex();
+
+        assertThat(
+                contentSearchRepository.existsById(
+                        staleContent.getId()
+                                .toString()
+                )
+        ).isFalse();
     }
 
     @Test
@@ -184,7 +609,6 @@ public class ContentSearchIntegrationTest {
         contentRepository.saveAndFlush(third);
 
         contentSearchIndexer.reindexAll();
-
         refreshSearchIndex();
 
         ContentSearchCondition condition =
@@ -194,7 +618,6 @@ public class ContentSearchIntegrationTest {
                         List.of()
                 );
 
-        // [추가] 첫 페이지
         CursorResponse<ContentListItemResponse> firstPage =
                 contentSearchService.search(
                         condition,
@@ -205,35 +628,54 @@ public class ContentSearchIntegrationTest {
                         "DESCENDING"
                 );
 
-        assertThat(firstPage.data()).hasSize(2);
-        assertThat(firstPage.hasNext()).isTrue();
-        assertThat(firstPage.nextCursor()).isNotBlank();
-        assertThat(firstPage.nextIdAfter()).isNotBlank();
+        assertThat(firstPage.data())
+                .hasSize(2);
 
-        // [추가] 첫 페이지가 반환한 cursor로 다음 페이지 조회
+        assertThat(firstPage.hasNext())
+                .isTrue();
+
+        assertThat(firstPage.nextCursor())
+                .isNotBlank();
+
+        assertThat(firstPage.nextIdAfter())
+                .isNotBlank();
+
         CursorResponse<ContentListItemResponse> secondPage =
                 contentSearchService.search(
                         condition,
                         firstPage.nextCursor(),
-                        UUID.fromString(firstPage.nextIdAfter()),
+                        UUID.fromString(
+                                firstPage.nextIdAfter()
+                        ),
                         2,
                         "createdAt",
                         "DESCENDING"
                 );
 
-        assertThat(secondPage.data()).hasSize(1);
-        assertThat(secondPage.hasNext()).isFalse();
+        assertThat(secondPage.data())
+                .hasSize(1);
 
-        // [추가] 페이지 간 중복 콘텐츠가 없어야 함
-        assertThat(secondPage.data().getFirst().id())
-                .isNotIn(
-                        firstPage.data().get(0).id(),
-                        firstPage.data().get(1).id()
-                );
+        assertThat(secondPage.hasNext())
+                .isFalse();
 
-        // [추가] 필터 전체 결과 수는 페이지와 무관하게 동일
-        assertThat(firstPage.totalCount()).isEqualTo(3L);
-        assertThat(secondPage.totalCount()).isEqualTo(3L);
+        assertThat(
+                secondPage.data()
+                        .getFirst()
+                        .id()
+        ).isNotIn(
+                firstPage.data()
+                        .get(0)
+                        .id(),
+                firstPage.data()
+                        .get(1)
+                        .id()
+        );
+
+        assertThat(firstPage.totalCount())
+                .isEqualTo(3L);
+
+        assertThat(secondPage.totalCount())
+                .isEqualTo(3L);
     }
 
     @Test
@@ -270,20 +712,15 @@ public class ContentSearchIntegrationTest {
         contentRepository.saveAndFlush(third);
 
         contentSearchIndexer.reindexAll();
-
-        // [추가]
-        // reindex 직후 검색 결과가 즉시 보이도록 refresh
         refreshSearchIndex();
 
-        ContentSearchCondition condition = new ContentSearchCondition(
-                ContentType.MOVIE,
-                null,
-                List.of()
-        );
+        ContentSearchCondition condition =
+                new ContentSearchCondition(
+                        ContentType.MOVIE,
+                        null,
+                        List.of()
+                );
 
-        // [추가]
-        // 리뷰가 없으므로 세 콘텐츠 모두 averageRating = 0.0
-        // 따라서 rate 정렬값이 동일하고 id가 실제 tie-breaker로 사용되어야 함
         CursorResponse<ContentListItemResponse> firstPage =
                 contentSearchService.search(
                         condition,
@@ -294,49 +731,73 @@ public class ContentSearchIntegrationTest {
                         "ASCENDING"
                 );
 
-        assertThat(firstPage.data()).hasSize(2);
-        assertThat(firstPage.hasNext()).isTrue();
-        assertThat(firstPage.nextCursor()).isNotBlank();
-        assertThat(firstPage.nextIdAfter()).isNotBlank();
+        assertThat(firstPage.data())
+                .hasSize(2);
+
+        assertThat(firstPage.hasNext())
+                .isTrue();
+
+        assertThat(firstPage.nextCursor())
+                .isNotBlank();
+
+        assertThat(firstPage.nextIdAfter())
+                .isNotBlank();
 
         CursorResponse<ContentListItemResponse> secondPage =
                 contentSearchService.search(
                         condition,
                         firstPage.nextCursor(),
-                        UUID.fromString(firstPage.nextIdAfter()),
+                        UUID.fromString(
+                                firstPage.nextIdAfter()
+                        ),
                         2,
                         "rate",
                         "ASCENDING"
                 );
 
-        assertThat(secondPage.data()).hasSize(1);
-        assertThat(secondPage.hasNext()).isFalse();
+        assertThat(secondPage.data())
+                .hasSize(1);
 
-        // [추가]
-        // primary sort(rate)가 모두 같으므로 id ASC 보조 정렬 순서 검증
-        List<UUID> expectedIds = List.of(
-                        first.getId(),
-                        second.getId(),
-                        third.getId()
-                )
-                .stream()
-                .sorted(Comparator.comparing(UUID::toString))
-                .toList();
+        assertThat(secondPage.hasNext())
+                .isFalse();
+
+        List<UUID> expectedIds =
+                List.of(
+                                first.getId(),
+                                second.getId(),
+                                third.getId()
+                        )
+                        .stream()
+                        .sorted(
+                                Comparator.comparing(
+                                        UUID::toString
+                                )
+                        )
+                        .toList();
 
         List<UUID> actualIds = List.of(
-                firstPage.data().get(0).id(),
-                firstPage.data().get(1).id(),
-                secondPage.data().get(0).id()
+                firstPage.data()
+                        .get(0)
+                        .id(),
+                firstPage.data()
+                        .get(1)
+                        .id(),
+                secondPage.data()
+                        .get(0)
+                        .id()
         );
 
-        // [추가]
-        // 페이지 사이 중복/누락 없이 id tie-breaker 순서대로 조회되는지 검증
         assertThat(actualIds)
-                .containsExactlyElementsOf(expectedIds)
+                .containsExactlyElementsOf(
+                        expectedIds
+                )
                 .doesNotHaveDuplicates();
 
-        assertThat(firstPage.totalCount()).isEqualTo(3L);
-        assertThat(secondPage.totalCount()).isEqualTo(3L);
+        assertThat(firstPage.totalCount())
+                .isEqualTo(3L);
+
+        assertThat(secondPage.totalCount())
+                .isEqualTo(3L);
     }
 
     private Content createContent(
@@ -363,7 +824,9 @@ public class ContentSearchIntegrationTest {
 
     private void refreshSearchIndex() {
         elasticsearchOperations
-                .indexOps(ContentSearchDocument.class)
+                .indexOps(
+                        ContentSearchDocument.class
+                )
                 .refresh();
     }
 }

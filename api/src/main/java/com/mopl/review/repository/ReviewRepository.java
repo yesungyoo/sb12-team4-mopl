@@ -2,31 +2,35 @@ package com.mopl.review.repository;
 
 import com.mopl.core.domain.review.entity.Review;
 import com.mopl.review.repository.projection.ContentReviewStatisticsProjection;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.EntityGraph;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-
 import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
-public interface ReviewRepository extends JpaRepository<Review, UUID> {
+public interface ReviewRepository extends JpaRepository<Review, UUID>, JpaSpecificationExecutor<Review> {
 
     @Override
-    @EntityGraph(attributePaths = "user")
+    @EntityGraph(attributePaths = {"user", "content"})
     Optional<Review> findById(UUID id);
 
-    @EntityGraph(attributePaths = "user")
+    @EntityGraph(attributePaths = {"user", "content"})
     Page<Review> findAllByContentId(UUID contentId, Pageable pageable);
+
+    @Override
+    @EntityGraph(attributePaths = {"user", "content"})
+    Page<Review> findAll(Specification<Review> spec, Pageable pageable);
 
     boolean existsByUserIdAndContentId(UUID userId, UUID contentId);
 
-    // 단일 콘텐츠 평균 평점 조회
     @Query("""
             select avg(r.rating)
             from Review r
@@ -34,10 +38,8 @@ public interface ReviewRepository extends JpaRepository<Review, UUID> {
             """)
     Double findAverageRatingByContentId(@Param("contentId") UUID contentId);
 
-    // 단일 콘텐츠 리뷰 수 조회
     long countByContentId(UUID contentId);
 
-    // 전체 재색인 시 콘텐츠별 리뷰 통계 일괄 조회
     @Query("""
             select
             r.content.id as contentId,
@@ -51,7 +53,6 @@ public interface ReviewRepository extends JpaRepository<Review, UUID> {
             @Param("contentIds") Collection<UUID> contentIds
     );
 
-    // 개인화 추천용 고평점 리뷰 조회
     @Query("""
             select r
             from Review r
@@ -61,7 +62,9 @@ public interface ReviewRepository extends JpaRepository<Review, UUID> {
                 and r.rating >= :minRating
             order by r.rating desc, r.updatedAt desc
             """)
-    List<Review> findHighRatedByUserId(@Param("userId") UUID userId,
-                                       @Param("minRating") BigDecimal minRating,
-                                       Pageable pageable);
+    List<Review> findHighRatedByUserId(
+            @Param("userId") UUID userId,
+            @Param("minRating") BigDecimal minRating,
+            Pageable pageable
+    );
 }
