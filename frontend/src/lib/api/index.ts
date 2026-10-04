@@ -31,6 +31,9 @@ export * from './conversations';
 // Export notifications API
 export * from './notifications';
 
+// Export notification preferences API
+export * from './notification-preferences';
+
 // Export watching sessions API
 export * from './watching-sessions';
 

@@ -53,6 +53,23 @@ export type FollowRequest = components['schemas']['FollowRequest'];
 // Notification types
 export type NotificationDto = components['schemas']['NotificationDto'];
 
+
+// Notification preference types (알림 유형별 수신 설정)
+export type NotificationType =
+    | 'FOLLOW'
+    | 'DIRECT_MESSAGE'
+    | 'PLAYLIST_SUBSCRIBED'
+    | 'PLAYLIST_CONTENT_ADDED'
+    | 'ROLE_CHANGED'
+    | 'FOLLOWING_PLAYLIST_CREATED'
+    | 'FOLLOWING_REVIEW_CREATED'
+    | 'FOLLOWING_WATCH_STARTED';
+
+export interface NotificationPreferenceDto {
+  type: NotificationType;
+  enabled: boolean;
+}
+
 // Watching Session types
 export type WatchingSessionDto = components['schemas']['WatchingSessionDto'];
 export type WatchingSessionChange = {
