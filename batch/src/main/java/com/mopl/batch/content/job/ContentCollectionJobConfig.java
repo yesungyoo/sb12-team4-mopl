@@ -12,6 +12,7 @@ import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.batch.JobExecutionExitCodeGenerator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -48,15 +49,22 @@ public class ContentCollectionJobConfig {
     }
 
     @Bean
+    public JobExecutionExitCodeGenerator jobExecutionExitCodeGenerator() {
+        return new JobExecutionExitCodeGenerator();
+    }
+
+    @Bean
     public Job contentCollectionJob(
             JobRepository jobRepository,
             @Qualifier(TMDB_STEP_NAME) Step tmdbContentCollectionStep,
             @Qualifier(SPORTS_DB_STEP_NAME) Step sportsDbContentCollectionStep,
-            JobParametersValidator contentCollectionJobParametersValidator
+            JobParametersValidator contentCollectionJobParametersValidator,
+            JobExecutionExitCodeGenerator jobExecutionExitCodeGenerator
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .incrementer(new RunIdIncrementer())
                 .validator(contentCollectionJobParametersValidator)
+                .listener(jobExecutionExitCodeGenerator)
                 .start(tmdbContentCollectionStep)
                 .next(sportsDbContentCollectionStep)
                 .build();
