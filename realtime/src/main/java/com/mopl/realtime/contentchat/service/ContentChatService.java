@@ -8,6 +8,9 @@ import com.mopl.realtime.contentchat.repository.ContentChatMessageRepository;
 import com.mopl.realtime.contentchat.repository.ContentRepository;
 import com.mopl.realtime.contentchat.repository.UserRepository;
 import java.util.UUID;
+import com.mopl.core.common.enums.MessageType;
+import com.mopl.realtime.moderation.service.MessageModerationService;
+import com.mopl.realtime.moderation.dto.RuleAction;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +22,7 @@ public class ContentChatService {
 	private final ContentRepository contentRepository;
 	private final UserRepository userRepository;
 	private final ContentChatMessageRepository contentChatMessageRepository;
+	private final MessageModerationService moderation;
 
 	@Transactional
 	public ContentChatResponse send(
@@ -26,6 +30,7 @@ public class ContentChatService {
 		UUID senderId,
 		String message
 	) {
+		moderation.assertCanSend(senderId);
 		Content content = contentRepository
 			.findByIdAndDeletedAtIsNull(contentId)
 			.orElseThrow(() ->
@@ -38,15 +43,21 @@ public class ContentChatService {
 				new IllegalArgumentException("User not found")
 			);
 
+		var decision = moderation.inspect(senderId, MessageType.CONTENT_CHAT, contentId, message);
+
 		ContentChatMessage contentChatMessage =
 			new ContentChatMessage(
 				content,
 				sender,
-				message
+				decision.content()
 			);
 
 		ContentChatMessage saved =
 			contentChatMessageRepository.save(contentChatMessage);
+
+		if (decision.action() != RuleAction.MASK) {
+			moderation.reviewAfterCommit(senderId, MessageType.CONTENT_CHAT, contentId, saved.getId(), message, decision.action());
+		}
 
 		return ContentChatResponse.from(saved);
 	}

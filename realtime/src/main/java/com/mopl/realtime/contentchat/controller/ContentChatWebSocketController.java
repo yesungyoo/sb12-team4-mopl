@@ -3,6 +3,8 @@ package com.mopl.realtime.contentchat.controller;
 import com.mopl.realtime.contentchat.dto.ContentChatResponse;
 import com.mopl.realtime.contentchat.dto.ContentChatSendRequest;
 import com.mopl.realtime.contentchat.service.ContentChatService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.validation.Valid;
 import java.security.Principal;
 import java.util.UUID;
@@ -19,6 +21,7 @@ public class ContentChatWebSocketController {
 
 	private final ContentChatService contentChatService;
 	private final SimpMessagingTemplate messagingTemplate;
+	private final MeterRegistry meters;
 
 	@MessageMapping("/contents/{contentId}/chat")
 	public void send(
@@ -26,17 +29,24 @@ public class ContentChatWebSocketController {
 		@Valid @Payload ContentChatSendRequest request,
 		Principal principal
 	) {
-		UUID senderId = UUID.fromString(principal.getName());
-
-		ContentChatResponse response = contentChatService.send(
-			contentId,
-			senderId,
-			request.content()
-		);
-
-		messagingTemplate.convertAndSend(
-			"/sub/contents/" + contentId + "/chat",
-			response
-		);
+		Timer.Sample sample = Timer.start(meters);
+		String outcome = "error";
+		try {
+			UUID senderId = UUID.fromString(principal.getName());
+	
+			ContentChatResponse response = contentChatService.send(
+				contentId,
+				senderId,
+				request.content()
+			);
+	
+			messagingTemplate.convertAndSend(
+				"/sub/contents/" + contentId + "/chat",
+				response
+			);
+			outcome = "success";
+		} finally {
+			sample.stop(meters.timer("realtime.message.send", "channel", "chat", "outcome", outcome));
+		}
 	}
 }

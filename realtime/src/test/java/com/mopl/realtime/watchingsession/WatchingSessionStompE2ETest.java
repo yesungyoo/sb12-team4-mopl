@@ -10,6 +10,8 @@ import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.sockjs.client.SockJsClient;
+import org.springframework.web.socket.sockjs.client.WebSocketTransport;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 import org.junit.jupiter.api.Tag;
 
@@ -52,7 +54,7 @@ class WatchingSessionStompE2ETest {
 			.isNotBlank();
 
 		WebSocketStompClient stompClient =
-			new WebSocketStompClient(new StandardWebSocketClient());
+			new WebSocketStompClient(new SockJsClient(java.util.List.of(new WebSocketTransport(new StandardWebSocketClient()))));
 
 		stompClient.setMessageConverter(
 			new MappingJackson2MessageConverter()
@@ -166,7 +168,7 @@ class WatchingSessionStompE2ETest {
 			.isNotBlank();
 
 		WebSocketStompClient stompClient =
-			new WebSocketStompClient(new StandardWebSocketClient());
+			new WebSocketStompClient(new SockJsClient(java.util.List.of(new WebSocketTransport(new StandardWebSocketClient()))));
 
 		stompClient.setMessageConverter(
 			new MappingJackson2MessageConverter()
@@ -269,7 +271,7 @@ class WatchingSessionStompE2ETest {
 			.isNotBlank();
 
 		WebSocketStompClient stompClient =
-			new WebSocketStompClient(new StandardWebSocketClient());
+			new WebSocketStompClient(new SockJsClient(java.util.List.of(new WebSocketTransport(new StandardWebSocketClient()))));
 
 		stompClient.setMessageConverter(
 			new MappingJackson2MessageConverter()
@@ -358,7 +360,7 @@ class WatchingSessionStompE2ETest {
 			.isNotBlank();
 
 		WebSocketStompClient stompClient =
-			new WebSocketStompClient(new StandardWebSocketClient());
+			new WebSocketStompClient(new SockJsClient(java.util.List.of(new WebSocketTransport(new StandardWebSocketClient()))));
 
 		stompClient.setMessageConverter(
 			new MappingJackson2MessageConverter()
@@ -444,7 +446,7 @@ class WatchingSessionStompE2ETest {
 			.isNotBlank();
 
 		WebSocketStompClient stompClient =
-			new WebSocketStompClient(new StandardWebSocketClient());
+			new WebSocketStompClient(new SockJsClient(java.util.List.of(new WebSocketTransport(new StandardWebSocketClient()))));
 
 		stompClient.setMessageConverter(
 			new MappingJackson2MessageConverter()

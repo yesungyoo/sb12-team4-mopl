@@ -12,6 +12,11 @@ import com.mopl.realtime.contentchat.dto.ContentChatResponse;
 import com.mopl.realtime.contentchat.repository.ContentChatMessageRepository;
 import com.mopl.realtime.contentchat.repository.ContentRepository;
 import com.mopl.realtime.contentchat.repository.UserRepository;
+import com.mopl.realtime.moderation.service.MessageModerationService;
+import com.mopl.realtime.moderation.exception.ModerationException;
+import com.mopl.core.common.enums.MessageType;
+import com.mopl.realtime.moderation.dto.RuleAction;
+import com.mopl.realtime.moderation.dto.RuleDecision;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +46,9 @@ class ContentChatServiceTest {
 	@Mock
 	private User sender;
 
+	@Mock
+	private MessageModerationService moderation;
+
 	private ContentChatService contentChatService;
 
 	private UUID contentId;
@@ -51,7 +59,8 @@ class ContentChatServiceTest {
 		contentChatService = new ContentChatService(
 			contentRepository,
 			userRepository,
-			contentChatMessageRepository
+			contentChatMessageRepository,
+			moderation
 		);
 
 		contentId = UUID.randomUUID();
@@ -60,6 +69,15 @@ class ContentChatServiceTest {
 		lenient().when(sender.getId()).thenReturn(senderId);
 		lenient().when(sender.getName()).thenReturn("사용자");
 		lenient().when(sender.getProfileImageUrl()).thenReturn("http://profile.image");
+	}
+
+	@Test
+	void restrictedSenderIsRejectedBeforePersistence() {
+		doThrow(new ModerationException(ModerationException.ErrorCode.CHAT_RESTRICTED))
+			.when(moderation).assertCanSend(senderId);
+		assertThatThrownBy(() -> contentChatService.send(contentId, senderId, "hello"))
+			.isInstanceOf(ModerationException.class);
+		verifyNoInteractions(contentRepository, userRepository, contentChatMessageRepository);
 	}
 
 	@Nested
@@ -73,6 +91,7 @@ class ContentChatServiceTest {
 				.thenReturn(Optional.of(content));
 			when(userRepository.findByIdAndDeletedAtIsNull(senderId))
 				.thenReturn(Optional.of(sender));
+			when(moderation.inspect(senderId, MessageType.CONTENT_CHAT, contentId, "hello")).thenReturn(new RuleDecision(RuleAction.ALLOW, "hello"));
 			when(contentChatMessageRepository.save(any(ContentChatMessage.class)))
 				.thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -95,6 +114,8 @@ class ContentChatServiceTest {
 
 			assertThat(response.sender().userId()).isEqualTo(senderId);
 			assertThat(response.content()).isEqualTo("hello");
+			verify(moderation).assertCanSend(senderId);
+			verify(moderation).inspect(senderId, MessageType.CONTENT_CHAT, contentId, "hello");
 		}
 
 		@Test

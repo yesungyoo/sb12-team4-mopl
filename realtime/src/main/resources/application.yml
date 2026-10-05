@@ -2,6 +2,24 @@ spring:
   application:
     name: mopl-realtime
 
+  ai:
+    model:
+      chat: ${MOPL_AI_CHAT_MODEL:none}
+      embedding: none
+      image: none
+      moderation: none
+      audio:
+        speech: none
+        transcription: none
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: ${MOPL_AI_MODEL:gpt-5.6-luna}
+          reasoning-effort: none
+    retry:
+      max-attempts: 1
+
   jpa:
     properties:
       hibernate:
@@ -12,10 +30,36 @@ server:
   port: ${REALTIME_PORT:8081}
 
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        realtime.message.send: true
+        moderation.message: true
+        moderation.llm: true
+        moderation.review: true
+        moderation.decision: true
+        moderation.apply: true
+        moderation.message.review: true
+        moderation.message.llm: true
   endpoints:
     web:
       exposure:
         include: health,info,prometheus
+
+mopl:
+  ai:
+    enabled: ${MOPL_AI_ENABLED:false}
+  moderation:
+    violation-window: ${MODERATION_VIOLATION_WINDOW:10m}
+    violation-threshold: ${MODERATION_VIOLATION_THRESHOLD:3}
+    context-limit: ${MODERATION_CONTEXT_LIMIT:10}
+    review-timeout: ${MODERATION_REVIEW_TIMEOUT:5s}
+    apply-timeout: ${MODERATION_APPLY_TIMEOUT:1s}
+    review-cooldown: ${MODERATION_REVIEW_COOLDOWN:1m}
+    message-review:
+      timeout: ${MODERATION_MESSAGE_REVIEW_TIMEOUT:5s}
+    short-restriction: 10m
+    long-restriction: 1d
 
 jwt:
   secret: ${JWT_SECRET}

@@ -1,0 +1,10 @@
+# Reviewed non-abusive lexical surfaces; literal matching after NFKC only.
+# This is a reviewed list, not an automatic export of dictionary membership.
+# Only covered WEAK matches are excluded. STRONG/contextual matches are independent.
+# Bare stems and calendar/insult homonyms such as 병신년 must not be listed here.
+시발점
+시발역
+시발주자
+시발택시
+시발항
+퍼시발

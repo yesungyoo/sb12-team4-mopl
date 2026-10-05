@@ -2,7 +2,7 @@ package com.mopl.realtime.directmessage.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.mopl.core.domain.message.entity.Conversation;
@@ -11,6 +11,11 @@ import com.mopl.core.domain.user.entity.User;
 import com.mopl.realtime.directmessage.dto.DirectMessageResponse;
 import com.mopl.realtime.directmessage.repository.ConversationRepository;
 import com.mopl.realtime.directmessage.repository.DirectMessageRepository;
+import com.mopl.realtime.moderation.service.MessageModerationService;
+import com.mopl.realtime.moderation.exception.ModerationException;
+import com.mopl.core.common.enums.MessageType;
+import com.mopl.realtime.moderation.dto.RuleAction;
+import com.mopl.realtime.moderation.dto.RuleDecision;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +45,9 @@ class DirectMessageServiceTest {
 	@Mock
 	private User user2;
 
+	@Mock
+	private MessageModerationService moderation;
+
 	private DirectMessageService directMessageService;
 
 	private UUID conversationId;
@@ -50,7 +58,8 @@ class DirectMessageServiceTest {
 	void setUp() {
 		directMessageService = new DirectMessageService(
 			conversationRepository,
-			directMessageRepository
+			directMessageRepository,
+			moderation
 		);
 
 		conversationId = UUID.randomUUID();
@@ -70,6 +79,15 @@ class DirectMessageServiceTest {
 		lenient().when(user2.getProfileImageUrl()).thenReturn("http://user2.image");
 	}
 
+	@Test
+	void restrictedSenderIsRejectedBeforePersistence() {
+		doThrow(new ModerationException(ModerationException.ErrorCode.CHAT_RESTRICTED))
+			.when(moderation).assertCanSend(user1Id);
+		assertThatThrownBy(() -> directMessageService.send(conversationId, user1Id, "hello"))
+			.isInstanceOf(ModerationException.class);
+		verifyNoInteractions(conversationRepository, directMessageRepository);
+	}
+
 	@Nested
 	@DisplayName("DM 전송")
 	class SendDirectMessage {
@@ -79,6 +97,8 @@ class DirectMessageServiceTest {
 		void success_fromUser1() {
 			when(conversationRepository.findWithParticipantsById(conversationId))
 				.thenReturn(Optional.of(conversation));
+			when(moderation.inspect(any(), eq(MessageType.DM), eq(conversationId), anyString()))
+                .thenAnswer(invocation -> new RuleDecision(RuleAction.ALLOW, invocation.getArgument(3, String.class)));
 			when(directMessageRepository.save(any(DirectMessage.class)))
 				.thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -104,6 +124,8 @@ class DirectMessageServiceTest {
 			assertThat(response.sender().userId()).isEqualTo(user1Id);
 			assertThat(response.receiver().userId()).isEqualTo(user2Id);
 			assertThat(response.content()).isEqualTo("hello");
+			verify(moderation).assertCanSend(user1Id);
+			verify(moderation).inspect(user1Id, MessageType.DM, conversationId, "hello");
 		}
 
 		@Test
@@ -111,6 +133,8 @@ class DirectMessageServiceTest {
 		void success_fromUser2() {
 			when(conversationRepository.findWithParticipantsById(conversationId))
 				.thenReturn(Optional.of(conversation));
+			when(moderation.inspect(any(), eq(MessageType.DM), eq(conversationId), anyString()))
+                .thenAnswer(invocation -> new RuleDecision(RuleAction.ALLOW, invocation.getArgument(3, String.class)));
 			when(directMessageRepository.save(any(DirectMessage.class)))
 				.thenAnswer(invocation -> invocation.getArgument(0));
 

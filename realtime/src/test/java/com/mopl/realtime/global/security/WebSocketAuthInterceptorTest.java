@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -55,6 +57,76 @@ class WebSocketAuthInterceptorTest {
 			jwtTokenProvider,
 			conversationRepository
 		);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {
+		"/pub/contents/%s/chat", "/pub/conversations/%s/direct-messages"
+	})
+	void authenticatedApplicationSendAllowed(String destination) {
+		Message<byte[]> message = frame(StompCommand.SEND, destination.formatted(UUID.randomUUID()), true);
+		assertThat(interceptor.preSend(message, messageChannel)).isSameAs(message);
+		verifyNoInteractions(conversationRepository);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {
+		"/sub/contents/%s/chat", "/sub/contents/%s/watch", "/user/sub/errors"
+	})
+	void authenticatedPublicAndOwnErrorSubscriptionsAllowed(String destination) {
+		Message<byte[]> message = frame(StompCommand.SUBSCRIBE, destination.formatted(UUID.randomUUID()), true);
+		assertThat(interceptor.preSend(message, messageChannel)).isSameAs(message);
+		verifyNoInteractions(conversationRepository);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {
+		"/sub/contents/%s/chat", "/sub/conversations/%s/direct-messages", "/user/sub/errors",
+		"/pub/**", "/pub/contents/*/chat", "/pub/contents/invalid/chat", "/pub/contents/%s/watch",
+		"/pub/contents/%s/chat/extra", "/pub/contents/%s/chat?query=1", "/unknown", ""
+	})
+	void brokerAndUnknownSendsRejected(String destination) {
+		assertThatThrownBy(() -> interceptor.preSend(
+			frame(StompCommand.SEND, destination.formatted(UUID.randomUUID()), true), messageChannel))
+			.isInstanceOf(IllegalArgumentException.class).hasMessage("Invalid send destination");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {
+		"/sub/**", "/sub/*", "/sub/errors-user-session", "/sub/errors-user*",
+		"/user/another/sub/errors", "/user/sub/errors/extra", "/sub/contents/*/chat",
+		"/sub/contents/{id}/chat", "/sub/conversations/*/direct-messages",
+		"/sub/contents/%s/chat/extra", "/sub/contents/%s/unknown", "/pub/contents/%s/chat", ""
+	})
+	void wildcardInternalAndUnknownSubscriptionsRejected(String destination) {
+		assertThatThrownBy(() -> interceptor.preSend(
+			frame(StompCommand.SUBSCRIBE, destination.formatted(UUID.randomUUID()), true), messageChannel))
+			.isInstanceOf(IllegalArgumentException.class).hasMessage("Invalid subscription destination");
+		verifyNoInteractions(conversationRepository);
+	}
+
+	@Test
+	void unauthenticatedSendAndSubscribeRejected() {
+		for (StompCommand command : new StompCommand[] {StompCommand.SEND, StompCommand.SUBSCRIBE}) {
+			assertThatThrownBy(() -> interceptor.preSend(frame(command, "/user/sub/errors", false), messageChannel))
+				.isInstanceOf(IllegalArgumentException.class).hasMessage("Authentication is required");
+		}
+	}
+
+	@Test
+	void missingDestinationRejected() {
+		for (StompCommand command : new StompCommand[] {StompCommand.SEND, StompCommand.SUBSCRIBE}) {
+			assertThatThrownBy(() -> interceptor.preSend(frame(command, null, true), messageChannel))
+				.isInstanceOf(IllegalArgumentException.class);
+		}
+	}
+
+	private Message<byte[]> frame(StompCommand command, String destination, boolean authenticated) {
+		StompHeaderAccessor accessor = StompHeaderAccessor.create(command);
+		accessor.setDestination(destination);
+		if (authenticated) accessor.setUser(new StompPrincipal(UUID.randomUUID(), "user@test.com", UserRole.USER));
+		accessor.setLeaveMutable(true);
+		return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
 	}
 
 	@Nested

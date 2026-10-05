@@ -1,4 +1,5 @@
 import {create} from 'zustand';
+import {useWebSocketStore} from './websocketStore';
 import type {JwtDto} from '@/lib/types';
 import {getCsrfToken, refreshToken, signIn, signOut} from '@/lib/api/auth';
 import type {BaseStore} from './types';
@@ -53,5 +54,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return data?.accessToken || null;
     },
 }));
+
+// 로그인·로그아웃·인증 갱신의 모든 사용자 변경 경로에서 이전 연결을 정리한다.
+useAuthStore.subscribe((state, previous) => {
+    if (state.data?.userDto.id !== previous.data?.userDto.id) {
+        useWebSocketStore.getState().disconnect();
+    } else if (state.data?.accessToken && state.data.accessToken !== previous.data?.accessToken) {
+        const client = useWebSocketStore.getState().stompClient;
+        if (client) client.connectHeaders = {Authorization: `Bearer ${state.data.accessToken}`};
+    }
+});
 
 export default useAuthStore;

@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:restriction": "node --experimental-vm-modules --test tests/websocketRestriction.test.mjs",
     "preview": "vite preview",
     "generate:api-types": "openapi-typescript api.json -o src/lib/types/api.ts"
   },
