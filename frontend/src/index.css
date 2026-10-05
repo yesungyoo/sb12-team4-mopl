@@ -302,7 +302,7 @@ body {
     letter-spacing: -0.01375rem; /* -0.22px */
   }
 
-  .text-caption2-m {
+    .text-caption2-m {
       font-family: 'Pretendard Variable', Pretendard, sans-serif;
       font-weight: 500;
       font-size: 0.6875rem; /* 11px */
@@ -311,11 +311,22 @@ body {
   }
 }
 
+/* Recommendation horizontal scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* AI playlist chat scroll */
 .ai-chat-scroll {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .ai-chat-scroll::-webkit-scrollbar {
-    display: none;
+  display: none;
 }

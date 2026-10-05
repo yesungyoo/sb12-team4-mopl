@@ -1,4 +1,8 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import {
+  Navigate,
+  Route,
+  Routes,
+} from 'react-router-dom';
 
 // Layouts
 import RootLayout from '@/components/layout/RootLayout';
@@ -16,53 +20,105 @@ import ContentDetailPage from '@/pages/contents/[contentId]/page';
 import PlaylistsPage from '@/pages/playlists/page';
 import PlaylistDetailPage from '@/pages/playlists/[playlistId]/page';
 import ProfilePage from '@/pages/profiles/[userId]/page';
+import ProfileRoutePage from '@/pages/profiles/page';
 import ConversationsPage from '@/pages/conversations/page';
 import ConversationWithPage from '@/pages/conversations/with/page';
 import AdminUsersPage from '@/pages/admin/users/page';
 
 // Error Pages
 import NotFoundPage from '@/pages/not-found/page';
-import ProfileRoutePage from "@/pages/profiles/page.tsx";
 
 export default function AppRoutes() {
   return (
     <Routes>
       <Route element={<RootLayout />}>
         {/* Public Auth Routes */}
-        <Route path="/sign-in" element={<SignInPage />} />
-        <Route path="/sign-up" element={<SignUpPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route
+          path="/sign-in"
+          element={<SignInPage />}
+        />
+
+        <Route
+          path="/sign-up"
+          element={<SignUpPage />}
+        />
+
+        <Route
+          path="/reset-password"
+          element={<ResetPasswordPage />}
+        />
 
         {/* Protected Routes */}
         <Route element={<ProtectedRoute />}>
           <Route element={<ProtectedLayout />}>
-            {/* Home redirect to contents */}
-            <Route index element={<Navigate to="/contents" replace />} />
+            {/* Home */}
+            <Route
+              index
+              element={<Navigate to="/contents" replace />}
+            />
 
             {/* Contents */}
-            <Route path="/contents" element={<ContentsPage />} />
-            <Route path="/contents/:contentId" element={<ContentDetailPage />} />
+            <Route
+              path="/contents"
+              element={<ContentsPage />}
+            />
+
+            <Route
+              path="/contents/:contentId"
+              element={<ContentDetailPage />}
+            />
 
             {/* Playlists */}
-            <Route path="/playlists" element={<PlaylistsPage />} />
-            <Route path="/playlists/:playlistId" element={<PlaylistDetailPage />} />
+            <Route
+              path="/playlists"
+              element={<PlaylistsPage />}
+            />
+
+            <Route
+              path="/playlists/:playlistId"
+              element={<PlaylistDetailPage />}
+            />
 
             {/* Users */}
-            <Route path="/profiles" element={<ProfileRoutePage />} />
-            <Route path="/profiles/:userId" element={<ProfilePage />} />
+            <Route
+              path="/profiles"
+              element={<ProfileRoutePage />}
+            />
+
+            <Route
+              path="/profiles/:userId"
+              element={<ProfilePage />}
+            />
 
             {/* Conversations */}
-            <Route path="/conversations/with" element={<ConversationWithPage />} />
-            <Route path="/conversations" element={<ConversationsPage />} />
-            <Route path="/conversations/:conversationId" element={<ConversationsPage />} />
+            <Route
+              path="/conversations/with"
+              element={<ConversationWithPage />}
+            />
+
+            <Route
+              path="/conversations"
+              element={<ConversationsPage />}
+            />
+
+            <Route
+              path="/conversations/:conversationId"
+              element={<ConversationsPage />}
+            />
 
             {/* Admin */}
-            <Route path="/admin/users" element={<AdminUsersPage />} />
+            <Route
+              path="/admin/users"
+              element={<AdminUsersPage />}
+            />
           </Route>
         </Route>
 
-        {/* 404 Not Found */}
-        <Route path="*" element={<NotFoundPage />} />
+        {/* 404 */}
+        <Route
+          path="*"
+          element={<NotFoundPage />}
+        />
       </Route>
     </Routes>
   );

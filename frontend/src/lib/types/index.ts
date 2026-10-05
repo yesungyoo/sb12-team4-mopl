@@ -31,6 +31,63 @@ export type ContentChatDto = {
   content: string;
 };
 
+// Recommendation types
+// [수정] 현재 api.json에 최신 추천 DTO가 없으므로 실제 Java DTO 계약 기준으로 직접 선언
+export type RecommendationContentType =
+  | 'MOVIE'
+  | 'TV_SERIES'
+  | 'SPORT';
+
+export type RecommendationTab =
+  | 'HOME'
+  | 'NEW'
+  | 'MOVIE'
+  | 'TV_SERIES'
+  | 'SPORT';
+
+export interface ContentTagDto {
+  tag: string;
+  value: string;
+}
+
+export interface RecommendationItem {
+  contentId: string;
+  title: string;
+  thumbnailUrl: string | null;
+  type: RecommendationContentType;
+  tags: ContentTagDto[];
+  semanticScore: number;
+  externalRating: number | null;
+  externalPopularity: number | null;
+  externalVoteCount: number | null;
+  reason: string;
+}
+
+export interface RecommendationSectionItem {
+  contentId: string;
+  title: string;
+  thumbnailUrl: string | null;
+  type: RecommendationContentType;
+  tags: ContentTagDto[];
+  averageRating: number | null;
+  reviewCount: number;
+  watcherCount: number;
+  createdAt: string;
+}
+
+export interface RecommendationSection {
+  key: string;
+  title: string;
+  description: string;
+  contentType: RecommendationContentType | null;
+  tag: string | null;
+  items: RecommendationSectionItem[];
+}
+
+export interface RecommendationSectionsResponse {
+  sections: RecommendationSection[];
+}
+
 // Playlist types
 export type PlaylistDto = components['schemas']['PlaylistDto'];
 export type PlaylistCreateRequest = components['schemas']['PlaylistCreateRequest'];
@@ -76,7 +133,7 @@ export type WatchingSessionChange = {
   type: 'JOIN' | 'LEAVE';
   watchingSession: WatchingSessionDto;
   watcherCount: number;
-}
+};
 
 // Cursor pagination types
 export type CursorResponseUserDto = components['schemas']['CursorResponseUserDto'];
@@ -89,15 +146,14 @@ export type CursorResponseNotificationDto = components['schemas']['CursorRespons
 export type CursorResponseWatchingSessionDto = components['schemas']['CursorResponseWatchingSessionDto'];
 
 export type CursorResponse =
-    CursorResponseUserDto
-    | CursorResponseContentDto
-    | CursorResponsePlaylistDto
-    | CursorResponseReviewDto
-    | CursorResponseConversationDto
-    | CursorResponseDirectMessageDto
-    | CursorResponseNotificationDto
-    | CursorResponseWatchingSessionDto;
-
+  | CursorResponseUserDto
+  | CursorResponseContentDto
+  | CursorResponsePlaylistDto
+  | CursorResponseReviewDto
+  | CursorResponseConversationDto
+  | CursorResponseDirectMessageDto
+  | CursorResponseNotificationDto
+  | CursorResponseWatchingSessionDto;
 
 // Error types
 export type ErrorResponse = components['schemas']['ErrorResponse'];
@@ -107,7 +163,6 @@ export type UserRole = 'USER' | 'ADMIN';
 export type ContentType = 'movie' | 'tvSeries' | 'sport';
 export type SortDirection = 'ASCENDING' | 'DESCENDING';
 export type NotificationLevel = 'INFO' | 'WARNING' | 'ERROR';
-
 
 /**
  * API Query Parameter Types
@@ -139,11 +194,11 @@ export type FindWatchingSessionsByContentParams =
   operations['findWatchingSessionsByContent']['parameters']['query'];
 
 export type CursorParams =
-    FindUsersParams
-    | FindContentsParams
-    | FindPlaylistsParams
-    | FindReviewsParams
-    | FindConversationsParams
-    | FindDmsParams
-    | GetNotificationsParams
-    | FindWatchingSessionsByContentParams;
+  | FindUsersParams
+  | FindContentsParams
+  | FindPlaylistsParams
+  | FindReviewsParams
+  | FindConversationsParams
+  | FindDmsParams
+  | GetNotificationsParams
+  | FindWatchingSessionsByContentParams;

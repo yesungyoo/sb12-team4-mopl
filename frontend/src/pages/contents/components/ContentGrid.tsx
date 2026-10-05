@@ -1,4 +1,5 @@
-import type {ContentDto} from '@/lib/types';
+import type { ContentDto } from '@/lib/types';
+
 import ContentCard from './ContentCard';
 
 interface ContentGridProps {
@@ -6,29 +7,59 @@ interface ContentGridProps {
   loading?: boolean;
 }
 
-export default function ContentGrid({ contents, loading }: ContentGridProps) {
+const GRID_CLASS_NAME = `
+  grid
+  grid-cols-2
+  gap-x-4
+  gap-y-8
+  sm:grid-cols-3
+  sm:gap-x-5
+  md:grid-cols-4
+  md:gap-x-[30px]
+  lg:grid-cols-5
+  xl:grid-cols-6
+`;
+
+export default function ContentGrid({
+  contents,
+  loading = false,
+}: ContentGridProps) {
   if (loading && contents.length === 0) {
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-6 sm:gap-x-5 sm:gap-y-8 md:gap-x-[30px] md:gap-y-[40px]">
-        {Array.from({ length: 30 }).map((_, index) => (
-          <ContentCardSkeleton key={index} />
-        ))}
+      <div className={GRID_CLASS_NAME}>
+        {Array.from({ length: 18 }).map(
+          (_, index) => (
+            <ContentCardSkeleton key={index} />
+          ),
+        )}
       </div>
     );
   }
 
   if (contents.length === 0) {
     return (
-      <div className="flex items-center justify-center h-[400px]">
-        <p className="text-body2-m text-gray-400">콘텐츠가 없습니다.</p>
+      <div
+        className="
+          flex
+          h-[400px]
+          items-center
+          justify-center
+        "
+      >
+        <p className="text-body2-m text-gray-400">
+          콘텐츠가 없습니다.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-6 sm:gap-x-5 sm:gap-y-8 md:gap-x-[30px] md:gap-y-[40px]">
+    <div className={GRID_CLASS_NAME}>
       {contents.map((content) => (
-        <ContentCard key={content.id} content={content} />
+        <ContentCard
+          key={content.id}
+          content={content}
+        />
       ))}
     </div>
   );
@@ -36,27 +67,61 @@ export default function ContentGrid({ contents, loading }: ContentGridProps) {
 
 function ContentCardSkeleton() {
   return (
-    <div className="flex flex-col gap-3 animate-pulse">
-      {/* Thumbnail Skeleton */}
-      <div className="w-full aspect-[260/390] rounded-2xl bg-gray-800" />
+    <div
+      className="
+        flex
+        w-full
+        animate-pulse
+        flex-col
+      "
+    >
+      <div
+        className="
+          aspect-[260/390]
+          w-full
+          rounded-2xl
+          bg-gray-800
+        "
+      />
 
-      {/* Info Skeleton */}
-      <div className="flex flex-col gap-1.5 pt-1.5">
-        <div className="h-5 bg-gray-800 rounded w-3/4" />
-        <div className="h-4 bg-gray-800 rounded w-full" />
-        <div className="h-4 bg-gray-800 rounded w-5/6" />
-      </div>
+      <div
+        className="
+          mt-3
+          h-5
+          w-4/5
+          rounded
+          bg-gray-800
+        "
+      />
 
-      {/* Rating Skeleton */}
-      <div className="flex items-center gap-0.5 pb-1">
-        <div className="w-4 h-4 bg-gray-800 rounded" />
-        <div className="h-3 bg-gray-800 rounded w-16" />
-      </div>
+      <div
+        className="
+          mt-2
+          h-4
+          w-14
+          rounded
+          bg-gray-800
+        "
+      />
 
-      {/* Tags Skeleton */}
-      <div className="flex gap-1.5">
-        <div className="h-[26px] bg-gray-800 rounded-full w-16" />
-        <div className="h-[26px] bg-gray-800 rounded-full w-12" />
+      <div className="mt-3 flex gap-1.5">
+        <div
+          className="
+            h-[26px]
+            w-[45%]
+            rounded-full
+            bg-gray-800
+          "
+        />
+
+        <div
+          className="
+            h-[26px]
+            w-[40%]
+            rounded-full
+            bg-gray-800
+          "
+        />
       </div>
     </div>
   );
