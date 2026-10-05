@@ -6,6 +6,7 @@ import com.mopl.core.common.event.FollowCreatedEvent;
 import com.mopl.core.domain.user.entity.Follow;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.user.dto.FollowListResponse;
+import com.mopl.user.dto.FollowResponse;
 import com.mopl.user.dto.UserResponse;
 import com.mopl.user.repository.FollowRepository;
 import com.mopl.user.repository.UserRepository;
@@ -27,8 +28,9 @@ public class FollowService {
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
 
+    /** followerId 가 followeeId 를 팔로우한다. 생성된 팔로우 관계(id 포함)를 반환한다. */
     @Transactional
-    public void follow(UUID followerId, UUID followeeId) {
+    public FollowResponse follow(UUID followerId, UUID followeeId) {
         if (followerId.equals(followeeId)) {
             throw new MoplException(UserErrorCode.SELF_FOLLOW_NOT_ALLOWED);
         }
@@ -39,24 +41,44 @@ public class FollowService {
             throw new MoplException(UserErrorCode.ALREADY_FOLLOWING);
         }
 
+        Follow saved;
         try {
             // existsBy 체크와 save 사이의 짧은 순간에 동일 팔로우 요청이 동시에 들어오면
             // 위 exists 체크를 둘 다 통과할 수 있다. DB UNIQUE 제약(uk_follows_follower_followee)이
             // 최종 방어선 역할을 하는데, saveAndFlush 로 즉시 반영해 그 순간에 발생하는
             // DataIntegrityViolationException 을 여기서 잡아 ALREADY_FOLLOWING 으로 변환한다.
-            followRepository.saveAndFlush(new Follow(follower, followee));
+            saved = followRepository.saveAndFlush(new Follow(follower, followee));
         } catch (DataIntegrityViolationException e) {
             throw new MoplException(UserErrorCode.ALREADY_FOLLOWING);
         }
         eventPublisher.publishEvent(new FollowCreatedEvent(followeeId, followerId));
+        return new FollowResponse(saved.getId(), followeeId, followerId);
     }
 
+    /**
+     * 팔로우 취소. 명세(DELETE /api/follows/{followId})에 따라 팔로우 관계의 id 로 식별하고,
+     * 요청자 본인의 팔로우만 취소할 수 있다.
+     */
     @Transactional
-    public void unfollow(UUID followerId, UUID followeeId) {
-        if (!followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)) {
-            throw new MoplException(UserErrorCode.FOLLOW_NOT_FOUND);
+    public void unfollow(UUID requesterId, UUID followId) {
+        Follow follow = followRepository.findById(followId)
+                .orElseThrow(() -> new MoplException(UserErrorCode.FOLLOW_NOT_FOUND));
+        if (!follow.getFollower().getId().equals(requesterId)) {
+            throw new MoplException(UserErrorCode.ACCESS_DENIED, "본인의 팔로우만 취소할 수 있습니다.");
         }
-        followRepository.deleteByFollowerIdAndFolloweeId(followerId, followeeId);
+        followRepository.delete(follow);
+    }
+
+    /** 특정 유저의 팔로워 수 (GET /api/follows/count) */
+    public long countFollowers(UUID followeeId) {
+        return followRepository.countByFolloweeId(followeeId);
+    }
+
+    /** 내가 특정 유저를 팔로우 중이면 그 관계를, 아니면 FOLLOW_NOT_FOUND(404)를 던진다. */
+    public FollowResponse getFollowedByMe(UUID requesterId, UUID followeeId) {
+        Follow follow = followRepository.findByFollowerIdAndFolloweeId(requesterId, followeeId)
+                .orElseThrow(() -> new MoplException(UserErrorCode.FOLLOW_NOT_FOUND));
+        return new FollowResponse(follow.getId(), followeeId, requesterId);
     }
 
     public FollowListResponse getFollowers(UUID followeeId, int page, int size) {

@@ -3,6 +3,7 @@ package com.mopl.user.repository;
 import com.mopl.core.domain.user.entity.Follow;
 import com.mopl.core.domain.user.entity.User;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +14,9 @@ import org.springframework.data.repository.query.Param;
 public interface FollowRepository extends JpaRepository<Follow, UUID> {
 
     boolean existsByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
+
+    /** 내가 특정 사용자를 팔로우 중인지 조회 (GET /api/follows/followed-by-me) */
+    Optional<Follow> findByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
 
     void deleteByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
 
