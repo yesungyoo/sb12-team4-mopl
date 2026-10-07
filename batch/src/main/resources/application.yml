@@ -1,3 +1,7 @@
 spring:
   application:
     name: mopl-batch
+
+  # API 서버와 독립적으로 배치 Job만 실행하고 종료하도록 웹 서버 비활성화
+  main:
+    web-application-type: none
