@@ -190,7 +190,7 @@ public class SemanticSearchIntegrationTest {
     }
 
     @Test
-    void embeddingIndexDoesNotRecreateDeletedElasticsearchDocument() {
+    void embeddingIndexDoesNothingWhenElasticsearchDocumentIsMissing() {
         Content content = createContent(
                 "Deleted Elasticsearch Document",
                 "Content whose search document is deleted"
