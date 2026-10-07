@@ -19,6 +19,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -27,10 +31,12 @@ import org.springframework.util.StringUtils;
 public class ContentEmbeddingIndexer {
 
     private static final int BATCH_SIZE = 500;
+    private static final int UPDATE_RETRY_ON_CONFLICT = 3;
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
+    private final ElasticsearchOperations elasticsearchOperations;
     private final ContentEmbeddingService contentEmbeddingService;
     private final AiProperties aiProperties;
     private final boolean aiEnabled;
@@ -39,6 +45,7 @@ public class ContentEmbeddingIndexer {
             ContentRepository contentRepository,
             ContentTagRepository contentTagRepository,
             ContentSearchRepository contentSearchRepository,
+            ElasticsearchOperations elasticsearchOperations,
             ContentEmbeddingService contentEmbeddingService,
             AiProperties aiProperties,
             @Value("${mopl.ai.enabled:false}")
@@ -47,6 +54,7 @@ public class ContentEmbeddingIndexer {
         this.contentRepository = contentRepository;
         this.contentTagRepository = contentTagRepository;
         this.contentSearchRepository = contentSearchRepository;
+        this.elasticsearchOperations = elasticsearchOperations;
         this.contentEmbeddingService = contentEmbeddingService;
         this.aiProperties = aiProperties;
         this.aiEnabled = aiEnabled;
@@ -66,10 +74,9 @@ public class ContentEmbeddingIndexer {
             contentSearchRepository
                     .findById(content.getId().toString())
                     .ifPresentOrElse(
-                            document -> embedAndSave(
+                            ignored -> embedAndUpdate(
                                     content,
-                                    contentTags,
-                                    document
+                                    contentTags
                             ),
                             () -> log.warn(
                                     "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
@@ -136,10 +143,9 @@ public class ContentEmbeddingIndexer {
                                     List.of()
                             );
 
-                    if (embedAndSave(
+                    if (embedAndUpdate(
                             content,
-                            contentTags,
-                            document
+                            contentTags
                     )) {
                         indexedCount++;
                     }
@@ -158,10 +164,9 @@ public class ContentEmbeddingIndexer {
         return indexedCount;
     }
 
-    private boolean embedAndSave(
+    private boolean embedAndUpdate(
             Content content,
-            List<ContentTag> contentTags,
-            ContentSearchDocument document
+            List<ContentTag> contentTags
     ) {
         try {
             List<Double> embedding =
@@ -174,13 +179,44 @@ public class ContentEmbeddingIndexer {
                 return false;
             }
 
-            document.updateEmbedding(embedding);
-            contentSearchRepository.save(document);
+            List<Float> floatEmbedding =
+                    embedding.stream()
+                            .map(Double::floatValue)
+                            .toList();
+
+            Document updateDocument =
+                    Document.create();
+
+            updateDocument.put(
+                    "embedding",
+                    floatEmbedding
+            );
+
+            UpdateQuery updateQuery =
+                    UpdateQuery.builder(
+                                    content.getId().toString()
+                            )
+                            .withDocument(updateDocument)
+                            .withRetryOnConflict(
+                                    UPDATE_RETRY_ON_CONFLICT
+                            )
+                            .withRefreshPolicy(
+                                    RefreshPolicy.IMMEDIATE
+                            )
+                            .build();
+
+            elasticsearchOperations.update(
+                    updateQuery,
+                    elasticsearchOperations
+                            .getIndexCoordinatesFor(
+                                    ContentSearchDocument.class
+                            )
+            );
 
             return true;
         } catch (RuntimeException exception) {
             log.warn(
-                    "콘텐츠 embedding 생성 또는 저장에 실패했습니다. contentId={}",
+                    "콘텐츠 embedding 생성 또는 갱신에 실패했습니다. contentId={}",
                     content.getId(),
                     exception
             );

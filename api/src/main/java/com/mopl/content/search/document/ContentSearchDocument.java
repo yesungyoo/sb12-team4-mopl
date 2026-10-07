@@ -156,10 +156,6 @@ public class ContentSearchDocument {
         );
     }
 
-    public void updateEmbedding(List<Double> embedding) {
-        this.embedding = toFloatEmbedding(embedding);
-    }
-
     private static List<Float> toFloatEmbedding(
             List<Double> embedding
     ) {

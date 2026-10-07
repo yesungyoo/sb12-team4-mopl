@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -23,12 +24,17 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 
 @ExtendWith(MockitoExtension.class)
 class ContentEmbeddingIndexerTest {
@@ -41,6 +47,9 @@ class ContentEmbeddingIndexerTest {
 
     @Mock
     private ContentSearchRepository contentSearchRepository;
+
+    @Mock
+    private ElasticsearchOperations elasticsearchOperations;
 
     @Mock
     private ContentEmbeddingService contentEmbeddingService;
@@ -84,6 +93,7 @@ class ContentEmbeddingIndexerTest {
                 contentRepository,
                 contentTagRepository,
                 contentSearchRepository,
+                elasticsearchOperations,
                 contentEmbeddingService
         );
     }
@@ -104,15 +114,18 @@ class ContentEmbeddingIndexerTest {
                 contentRepository,
                 contentTagRepository,
                 contentSearchRepository,
+                elasticsearchOperations,
                 contentEmbeddingService
         );
     }
 
     @Test
-    void indexesEmbeddingForExistingDocument() {
+    void updatesOnlyEmbeddingForExistingDocument() {
         enableAi();
 
         UUID contentId = UUID.randomUUID();
+        IndexCoordinates indexCoordinates =
+                IndexCoordinates.of("contents");
         List<ContentTag> contentTags =
                 List.of(contentTag);
         List<Double> embedding =
@@ -132,14 +145,21 @@ class ContentEmbeddingIndexerTest {
                 contentTags
         )).thenReturn(embedding);
 
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(indexCoordinates);
+
         contentEmbeddingIndexer.index(content);
+
+        ArgumentCaptor<UpdateQuery> updateQueryCaptor =
+                ArgumentCaptor.forClass(UpdateQuery.class);
 
         InOrder indexingOrder =
                 inOrder(
                         contentTagRepository,
                         contentSearchRepository,
                         contentEmbeddingService,
-                        document
+                        elasticsearchOperations
                 );
 
         indexingOrder.verify(contentTagRepository)
@@ -151,21 +171,57 @@ class ContentEmbeddingIndexerTest {
         indexingOrder.verify(contentEmbeddingService)
                 .embedContent(content, contentTags);
 
-        indexingOrder.verify(document)
-                .updateEmbedding(embedding);
+        indexingOrder.verify(elasticsearchOperations)
+                .getIndexCoordinatesFor(
+                        ContentSearchDocument.class
+                );
 
-        indexingOrder.verify(contentSearchRepository)
-                .save(document);
+        indexingOrder.verify(elasticsearchOperations)
+                .update(
+                        updateQueryCaptor.capture(),
+                        same(indexCoordinates)
+                );
+
+        UpdateQuery updateQuery =
+                updateQueryCaptor.getValue();
+
+        assertThat(updateQuery.getId())
+                .isEqualTo(contentId.toString());
+
+        assertThat(updateQuery.getDocument())
+                .containsOnlyKeys("embedding");
+
+        assertThat(
+                updateQuery.getDocument()
+                        .get("embedding")
+        ).isEqualTo(List.of(0.1F, 0.2F));
+
+        assertThat(updateQuery.getDocAsUpsert())
+                .isNotEqualTo(Boolean.TRUE);
+
+        assertThat(updateQuery.getUpsert())
+                .isNull();
+
+        assertThat(updateQuery.getRetryOnConflict())
+                .isEqualTo(3);
+
+        assertThat(updateQuery.getRefreshPolicy())
+                .isEqualTo(RefreshPolicy.IMMEDIATE);
+
+        verifyNoInteractions(document);
+
+        verify(contentSearchRepository, never())
+                .save(any(ContentSearchDocument.class));
     }
 
     @Test
-    void doesNotSaveWhenEmbeddingIsNull() {
-        assertMissingEmbeddingIsNotSaved(null);
+    void doesNotUpdateWhenEmbeddingIsNull() {
+        assertMissingEmbeddingIsNotUpdated(null);
     }
 
     @Test
-    void doesNotSaveWhenEmbeddingIsEmpty() {
-        assertMissingEmbeddingIsNotSaved(List.of());
+    void doesNotUpdateWhenEmbeddingIsEmpty() {
+        assertMissingEmbeddingIsNotUpdated(List.of());
     }
 
     @Test
@@ -196,17 +252,22 @@ class ContentEmbeddingIndexerTest {
                 () -> contentEmbeddingIndexer.index(content)
         ).doesNotThrowAnyException();
 
-        verifyNoInteractions(document);
+        verifyNoInteractions(
+                document,
+                elasticsearchOperations
+        );
 
         verify(contentSearchRepository, never())
-                .save(document);
+                .save(any(ContentSearchDocument.class));
     }
 
     @Test
-    void doesNotPropagateEmbeddingSaveFailure() {
+    void doesNotPropagateEmbeddingUpdateFailure() {
         enableAi();
 
         UUID contentId = UUID.randomUUID();
+        IndexCoordinates indexCoordinates =
+                IndexCoordinates.of("contents");
         List<ContentTag> contentTags =
                 List.of(contentTag);
         List<Double> embedding =
@@ -226,7 +287,14 @@ class ContentEmbeddingIndexerTest {
                 contentTags
         )).thenReturn(embedding);
 
-        when(contentSearchRepository.save(document))
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(indexCoordinates);
+
+        when(elasticsearchOperations.update(
+                any(UpdateQuery.class),
+                same(indexCoordinates)
+        ))
                 .thenThrow(
                         new RuntimeException(
                                 "Elasticsearch unavailable"
@@ -237,11 +305,16 @@ class ContentEmbeddingIndexerTest {
                 () -> contentEmbeddingIndexer.index(content)
         ).doesNotThrowAnyException();
 
-        verify(document)
-                .updateEmbedding(embedding);
+        verifyNoInteractions(document);
 
-        verify(contentSearchRepository)
-                .save(document);
+        verify(elasticsearchOperations)
+                .update(
+                        any(UpdateQuery.class),
+                        same(indexCoordinates)
+                );
+
+        verify(contentSearchRepository, never())
+                .save(any(ContentSearchDocument.class));
     }
 
     @Test
@@ -265,6 +338,8 @@ class ContentEmbeddingIndexerTest {
         UUID firstContentId = UUID.randomUUID();
         UUID secondContentId = UUID.randomUUID();
         UUID thirdContentId = UUID.randomUUID();
+        IndexCoordinates indexCoordinates =
+                IndexCoordinates.of("contents");
 
         List<Content> contents = List.of(
                 firstContent,
@@ -342,6 +417,10 @@ class ContentEmbeddingIndexerTest {
                 List.of()
         )).thenReturn(List.of());
 
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(indexCoordinates);
+
         long indexedCount =
                 contentEmbeddingIndexer.reindexAll();
 
@@ -365,23 +444,26 @@ class ContentEmbeddingIndexerTest {
         verify(contentSearchRepository)
                 .findAllById(documentIds);
 
-        verify(firstDocument)
-                .updateEmbedding(firstEmbedding);
+        ArgumentCaptor<UpdateQuery> updateQueryCaptor =
+                ArgumentCaptor.forClass(UpdateQuery.class);
 
-        verify(contentSearchRepository)
-                .save(firstDocument);
+        verify(elasticsearchOperations)
+                .update(
+                        updateQueryCaptor.capture(),
+                        same(indexCoordinates)
+                );
 
-        verify(secondDocument, never())
-                .updateEmbedding(any());
+        UpdateQuery updateQuery =
+                updateQueryCaptor.getValue();
 
-        verify(thirdDocument, never())
-                .updateEmbedding(any());
+        assertThat(updateQuery.getId())
+                .isEqualTo(firstContentId.toString());
+
+        assertThat(updateQuery.getDocument())
+                .containsOnlyKeys("embedding");
 
         verify(contentSearchRepository, never())
-                .save(secondDocument);
-
-        verify(contentSearchRepository, never())
-                .save(thirdDocument);
+                .save(any(ContentSearchDocument.class));
     }
 
     private ContentEmbeddingIndexer createIndexer(
@@ -391,6 +473,7 @@ class ContentEmbeddingIndexerTest {
                 contentRepository,
                 contentTagRepository,
                 contentSearchRepository,
+                elasticsearchOperations,
                 contentEmbeddingService,
                 aiProperties,
                 aiEnabled
@@ -402,7 +485,7 @@ class ContentEmbeddingIndexerTest {
                 .thenReturn("test-api-key");
     }
 
-    private void assertMissingEmbeddingIsNotSaved(
+    private void assertMissingEmbeddingIsNotUpdated(
             List<Double> embedding
     ) {
         enableAi();
@@ -427,9 +510,12 @@ class ContentEmbeddingIndexerTest {
 
         contentEmbeddingIndexer.index(content);
 
-        verifyNoInteractions(document);
+        verifyNoInteractions(
+                document,
+                elasticsearchOperations
+        );
 
         verify(contentSearchRepository, never())
-                .save(document);
+                .save(any(ContentSearchDocument.class));
     }
 }

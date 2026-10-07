@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.mopl.content.dto.ContentListResponse;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
@@ -132,6 +133,58 @@ public class SemanticSearchIntegrationTest {
         assertThat(response.contents()).hasSize(2);
         assertThat(response.contents().getFirst().title()).isEqualTo("Space Journey");
         assertThat(response.contents().get(1).title()).isEqualTo("Cooking Life");
+    }
+
+    @Test
+    void indexPreservesExistingEmbeddingWhenRegenerationFails() {
+        Content content = createContent(
+                "Original Title",
+                "Original description"
+        );
+
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(createVector(0)));
+
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument embeddedDocument =
+                contentSearchRepository
+                        .findById(content.getId().toString())
+                        .orElseThrow();
+
+        assertThat(embeddedDocument.getEmbedding()).isNotEmpty();
+
+        List<Float> existingEmbedding =
+                List.copyOf(embeddedDocument.getEmbedding());
+
+        content.update(
+                null,
+                "Updated Title",
+                null,
+                null,
+                null
+        );
+        contentRepository.saveAndFlush(content);
+
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenThrow(new RuntimeException("embedding failure"));
+
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument updatedDocument =
+                contentSearchRepository
+                        .findById(content.getId().toString())
+                        .orElseThrow();
+
+        assertThat(updatedDocument.getTitle())
+                .isEqualTo("Updated Title");
+        assertThat(updatedDocument.getEmbedding())
+                .containsExactlyElementsOf(existingEmbedding);
     }
 
     @Test
