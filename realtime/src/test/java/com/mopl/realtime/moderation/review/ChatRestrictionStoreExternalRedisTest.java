@@ -138,7 +138,8 @@ class ChatRestrictionStoreExternalRedisTest {
             org.mockito.Mockito.mock(com.mopl.realtime.contentchat.repository.ContentChatMessageRepository.class), moderation);
         var dm = new com.mopl.realtime.directmessage.service.DirectMessageService(
             org.mockito.Mockito.mock(com.mopl.realtime.directmessage.repository.ConversationRepository.class),
-            org.mockito.Mockito.mock(com.mopl.realtime.directmessage.repository.DirectMessageRepository.class), moderation);
+            org.mockito.Mockito.mock(com.mopl.realtime.directmessage.repository.DirectMessageRepository.class), moderation,
+            org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         var state = store.restriction(user);
         assertThat(state.level()).isEqualTo(SanctionLevel.TEMPORARY_SHORT);
         assertThatThrownBy(() -> chat.send(UUID.randomUUID(), user, "정상 메시지"))

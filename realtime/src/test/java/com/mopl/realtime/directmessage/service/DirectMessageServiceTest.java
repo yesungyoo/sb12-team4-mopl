@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 import com.mopl.core.domain.message.entity.Conversation;
 import com.mopl.core.domain.message.entity.DirectMessage;
 import com.mopl.core.domain.user.entity.User;
+import com.mopl.core.common.event.DirectMessageReceivedEvent;
 import com.mopl.realtime.directmessage.dto.DirectMessageResponse;
 import com.mopl.realtime.directmessage.repository.ConversationRepository;
 import com.mopl.realtime.directmessage.repository.DirectMessageRepository;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class DirectMessageServiceTest {
@@ -48,6 +50,9 @@ class DirectMessageServiceTest {
 	@Mock
 	private MessageModerationService moderation;
 
+	@Mock
+	private ApplicationEventPublisher eventPublisher;
+
 	private DirectMessageService directMessageService;
 
 	private UUID conversationId;
@@ -59,7 +64,8 @@ class DirectMessageServiceTest {
 		directMessageService = new DirectMessageService(
 			conversationRepository,
 			directMessageRepository,
-			moderation
+			moderation,
+			eventPublisher
 		);
 
 		conversationId = UUID.randomUUID();
@@ -126,6 +132,9 @@ class DirectMessageServiceTest {
 			assertThat(response.content()).isEqualTo("hello");
 			verify(moderation).assertCanSend(user1Id);
 			verify(moderation).inspect(user1Id, MessageType.DM, conversationId, "hello");
+			verify(eventPublisher).publishEvent(
+				new DirectMessageReceivedEvent(user2Id, user1Id)
+			);
 		}
 
 		@Test

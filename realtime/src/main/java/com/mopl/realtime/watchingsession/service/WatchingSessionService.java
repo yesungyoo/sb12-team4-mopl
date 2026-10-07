@@ -1,5 +1,6 @@
 package com.mopl.realtime.watchingsession.service;
 
+import com.mopl.core.common.event.FollowingWatchStartedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.core.domain.watchingsession.model.WatchingSessionState;
@@ -12,10 +13,12 @@ import com.mopl.realtime.contentchat.repository.UserRepository;
 import com.mopl.realtime.watchingsession.dto.WatchingContentSummary;
 import com.mopl.realtime.watchingsession.dto.WatchingSessionDto;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,6 +30,7 @@ public class WatchingSessionService {
 	private final UserRepository userRepository;
 	private final ContentRepository contentRepository;
 	private final ContentSummaryRepository contentSummaryRepository;
+	private final ApplicationEventPublisher eventPublisher;
 
 	// 사용자당 활성 시청 세션은 하나만 유지한다.
 	// 새 시청 세션에 참여하면 기존 세션을 종료하고 새 세션으로 교체한다.
@@ -37,13 +41,15 @@ public class WatchingSessionService {
 		String webSocketSessionId,
 		String subscriptionId
 	) {
-		userRepository
+		User watcher = userRepository
 			.findByIdAndDeletedAtIsNull(userId)
 			.orElseThrow();
 
-		contentRepository
+		Content content = contentRepository
 			.findByIdAndDeletedAtIsNull(contentId)
 			.orElseThrow();
+
+		List<UUID> followerIds = userRepository.findFollowerIds(userId);
 
 		Optional<WatchingSessionState> previousSession =
 			watchingSessionRepository.findByUserId(userId);
@@ -89,6 +95,14 @@ public class WatchingSessionService {
 		);
 
 		watchingSessionRepository.save(session);
+
+		eventPublisher.publishEvent(
+			new FollowingWatchStartedEvent(
+				followerIds,
+				watcher.getName(),
+				content.getTitle()
+			)
+		);
 
 		return new WatchingSessionJoinResult(
 			session,

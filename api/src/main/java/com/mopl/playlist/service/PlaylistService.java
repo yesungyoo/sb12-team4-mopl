@@ -9,9 +9,12 @@ import com.mopl.common.exception.playlist.PlaylistContentNotFoundException;
 import com.mopl.common.exception.playlist.PlaylistNotFoundException;
 import com.mopl.common.exception.user.UserErrorCode;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.core.common.event.FollowingPlaylistCreatedEvent;
+import com.mopl.core.common.event.PlaylistContentAddedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.playlist.entity.Playlist;
 import com.mopl.core.domain.playlist.entity.PlaylistContent;
+import com.mopl.core.domain.playlist.entity.PlaylistSubscription;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.playlist.dto.*;
 import com.mopl.core.common.dto.CursorResponse;
@@ -20,12 +23,14 @@ import com.mopl.playlist.repository.PlaylistRepository;
 import com.mopl.playlist.repository.PlaylistSubscriptionRepository;
 import com.mopl.content.search.service.ContentSearchService;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.user.repository.FollowRepository;
 
 import jakarta.persistence.EntityManager;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -51,6 +56,8 @@ public class PlaylistService {
 	private final ContentRepository contentRepository;
 	private final ContentSearchService contentSearchService;
 	private final PlaylistSubscriptionRepository playlistSubscriptionRepository;
+	private final FollowRepository followRepository;
+	private final ApplicationEventPublisher eventPublisher;
 
 	private final Validator validator;
 
@@ -67,6 +74,8 @@ public class PlaylistService {
 		ContentRepository contentRepository,
 		ContentSearchService contentSearchService,
 		PlaylistSubscriptionRepository playlistSubscriptionRepository,
+		FollowRepository followRepository,
+		ApplicationEventPublisher eventPublisher,
 		Validator validator
 	) {
 		this.playlistRepository = playlistRepository;
@@ -75,6 +84,8 @@ public class PlaylistService {
 		this.contentRepository = contentRepository;
 		this.contentSearchService = contentSearchService;
 		this.playlistSubscriptionRepository = playlistSubscriptionRepository;
+		this.followRepository = followRepository;
+		this.eventPublisher = eventPublisher;
 		this.validator = validator;
 	}
 
@@ -183,6 +194,15 @@ public class PlaylistService {
 
 		Playlist playlist = new Playlist(owner, request.title(), request.description());
 		Playlist saved = playlistRepository.save(playlist);
+		List<UUID> followerIds = followRepository.findFollowerIds(owner.getId());
+
+		eventPublisher.publishEvent(
+			new FollowingPlaylistCreatedEvent(
+				followerIds,
+				owner.getName(),
+				saved.getTitle()
+			)
+		);
 
 		return PlaylistResponse.from(saved);
 	}
@@ -284,6 +304,13 @@ public class PlaylistService {
 		} catch (DataIntegrityViolationException e) {
 			throw new PlaylistContentAlreadyExistsException();
 		}
+
+		playlistSubscriptionRepository.findAllByPlaylistId(playlistId).stream()
+			.map(PlaylistSubscription::getSubscriber)
+			.map(User::getId)
+			.forEach(subscriberId -> eventPublisher.publishEvent(
+				new PlaylistContentAddedEvent(subscriberId, playlist.getTitle())
+			));
 	}
 
 	@Transactional

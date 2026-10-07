@@ -5,7 +5,10 @@ import com.mopl.common.exception.playlist.PlaylistAccessDeniedException;
 import com.mopl.common.exception.playlist.PlaylistNotFoundException;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.core.common.dto.CursorResponse;
+import com.mopl.core.common.event.FollowingPlaylistCreatedEvent;
+import com.mopl.core.common.event.PlaylistContentAddedEvent;
 import com.mopl.core.domain.playlist.entity.Playlist;
+import com.mopl.core.domain.playlist.entity.PlaylistSubscription;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.playlist.dto.PlaylistCreateRequest;
 import com.mopl.playlist.dto.PlaylistResponse;
@@ -31,6 +34,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import static org.mockito.ArgumentMatchers.eq;
@@ -40,6 +44,7 @@ import com.mopl.common.exception.playlist.PlaylistContentNotFoundException;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.playlist.entity.PlaylistContent;
 import com.mopl.playlist.repository.PlaylistSubscriptionRepository;
+import com.mopl.user.repository.FollowRepository;
 
 import java.util.Map;
 import java.time.LocalDateTime;
@@ -73,6 +78,12 @@ class PlaylistServiceTest {
 	private PlaylistSubscriptionRepository playlistSubscriptionRepository;
 
 	@Mock
+	private FollowRepository followRepository;
+
+	@Mock
+	private ApplicationEventPublisher eventPublisher;
+
+	@Mock
 	private Validator validator;
 
 	@Mock
@@ -94,6 +105,8 @@ class PlaylistServiceTest {
 			contentRepository,
 			contentSearchService,
 			playlistSubscriptionRepository,
+			followRepository,
+			eventPublisher,
 			validator
 		);
 		ownerId = UUID.randomUUID();
@@ -471,8 +484,10 @@ class PlaylistServiceTest {
 		@DisplayName("정상 요청이면 현재 사용자를 owner로 하는 플레이리스트를 저장한다")
 		void success() {
 			PlaylistCreateRequest request = new PlaylistCreateRequest("제목", "설명");
+			List<UUID> followerIds = List.of(UUID.randomUUID(), UUID.randomUUID());
 			when(entityManager.find(User.class, ownerId)).thenReturn(owner);
 			when(playlistRepository.save(any(Playlist.class))).thenAnswer(invocation -> invocation.getArgument(0));
+			when(followRepository.findFollowerIds(ownerId)).thenReturn(followerIds);
 
 			ArgumentCaptor<Playlist> captor = ArgumentCaptor.forClass(Playlist.class);
 
@@ -485,6 +500,9 @@ class PlaylistServiceTest {
 			assertThat(saved.getTitle()).isEqualTo("제목");
 			assertThat(saved.getDescription()).isEqualTo("설명");
 			assertThat(response.owner().userId()).isEqualTo(ownerId);
+			verify(eventPublisher).publishEvent(
+				new FollowingPlaylistCreatedEvent(followerIds, "길동", "제목")
+			);
 		}
 	}
 
@@ -674,13 +692,23 @@ class PlaylistServiceTest {
 		void success() {
 			UUID contentId = UUID.randomUUID();
 			Content content = mock(Content.class);
+			UUID subscriberId = UUID.randomUUID();
+			User subscriber = mock(User.class);
+			PlaylistSubscription subscription = mock(PlaylistSubscription.class);
 			when(playlistRepository.findById(playlistId)).thenReturn(Optional.of(playlist));
 			when(contentRepository.findByIdAndDeletedAtIsNull(contentId)).thenReturn(Optional.of(content));
 			when(playlistContentRepository.existsByPlaylistIdAndContentId(playlistId, contentId)).thenReturn(false);
+			when(playlistSubscriptionRepository.findAllByPlaylistId(playlistId))
+				.thenReturn(List.of(subscription));
+			when(subscription.getSubscriber()).thenReturn(subscriber);
+			when(subscriber.getId()).thenReturn(subscriberId);
 
 			playlistService.addContentToPlaylist(ownerId, playlistId, contentId);
 
 			verify(playlistContentRepository).saveAndFlush(any(PlaylistContent.class));
+			verify(eventPublisher).publishEvent(
+				new PlaylistContentAddedEvent(subscriberId, "기존 제목")
+			);
 		}
 
 		@Test

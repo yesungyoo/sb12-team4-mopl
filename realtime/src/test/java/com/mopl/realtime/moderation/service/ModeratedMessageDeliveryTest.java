@@ -35,6 +35,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.Arguments;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
@@ -57,6 +58,7 @@ class ModeratedMessageDeliveryTest {
     private final ModerationReviewDispatcher sanctions=mock(ModerationReviewDispatcher.class);
     private final ChatRestrictionStore restrictions=mock(ChatRestrictionStore.class);
     private final SimpMessagingTemplate broadcasts=mock(SimpMessagingTemplate.class);
+    private final ApplicationEventPublisher eventPublisher=mock(ApplicationEventPublisher.class);
     private ContentChatWebSocketController chatController;
     private DirectMessageWebSocketController dmController;
     @BeforeEach void setup() {
@@ -76,7 +78,7 @@ class ModeratedMessageDeliveryTest {
         var moderation=new MessageModerationService(restrictions,new ProfanityRule(settings,MessageReviewTestSettings.defaults()),
             reviews,logs,sanctions,settings,meters);
         chatController=new ContentChatWebSocketController(new ContentChatService(contents,users,chats,moderation),broadcasts,meters);
-        dmController=new DirectMessageWebSocketController(new DirectMessageService(conversations,messages,moderation),broadcasts,meters);
+        dmController=new DirectMessageWebSocketController(new DirectMessageService(conversations,messages,moderation,eventPublisher),broadcasts,meters);
     }
     @ParameterizedTest @EnumSource(MessageType.class)
     void ruleMasksBeforePersistenceAndBroadcastWhileEvidenceRetainsOriginal(MessageType type) {

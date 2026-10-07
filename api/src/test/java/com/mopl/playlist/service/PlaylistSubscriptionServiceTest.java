@@ -4,6 +4,7 @@ import com.mopl.common.exception.MoplException;
 import com.mopl.common.exception.playlist.PlaylistNotFoundException;
 import com.mopl.common.exception.playlist.PlaylistSubscriptionAlreadyExistsException;
 import com.mopl.common.exception.playlist.PlaylistSubscriptionNotFoundException;
+import com.mopl.core.common.event.PlaylistSubscribedEvent;
 import com.mopl.core.domain.playlist.entity.Playlist;
 import com.mopl.core.domain.playlist.entity.PlaylistSubscription;
 import com.mopl.core.domain.user.entity.User;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.Optional;
@@ -38,21 +40,31 @@ class PlaylistSubscriptionServiceTest {
 	@Mock
 	private EntityManager entityManager;
 
+	@Mock
+	private ApplicationEventPublisher eventPublisher;
+
 	private PlaylistSubscriptionService playlistSubscriptionService;
 
 	private UUID playlistId;
 	private Playlist playlist;
+	private UUID playlistOwnerId;
+	private User playlistOwner;
 	private UUID subscriberId;
 	private User subscriber;
 
 	@BeforeEach
 	void setUp() {
 		playlistSubscriptionService = new PlaylistSubscriptionService(
-			playlistRepository, playlistSubscriptionRepository, entityManager
+			playlistRepository, playlistSubscriptionRepository, entityManager, eventPublisher
 		);
 
 		playlistId = UUID.randomUUID();
 		playlist = mock(Playlist.class);
+		playlistOwnerId = UUID.randomUUID();
+		playlistOwner = mock(User.class);
+		lenient().when(playlist.getOwner()).thenReturn(playlistOwner);
+		lenient().when(playlistOwner.getId()).thenReturn(playlistOwnerId);
+		lenient().when(playlist.getTitle()).thenReturn("플레이리스트 제목");
 
 		subscriberId = UUID.randomUUID();
 		subscriber = mock(User.class);
@@ -111,6 +123,9 @@ class PlaylistSubscriptionServiceTest {
 			playlistSubscriptionService.subscribe(subscriberId, playlistId);
 
 			verify(playlistSubscriptionRepository).saveAndFlush(any(PlaylistSubscription.class));
+			verify(eventPublisher).publishEvent(
+				new PlaylistSubscribedEvent(playlistOwnerId, subscriberId, "플레이리스트 제목")
+			);
 		}
 
 		@Test

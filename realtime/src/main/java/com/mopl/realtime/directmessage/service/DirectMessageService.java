@@ -1,5 +1,6 @@
 package com.mopl.realtime.directmessage.service;
 
+import com.mopl.core.common.event.DirectMessageReceivedEvent;
 import com.mopl.core.domain.message.entity.Conversation;
 import com.mopl.core.domain.message.entity.DirectMessage;
 import com.mopl.core.domain.user.entity.User;
@@ -11,6 +12,7 @@ import com.mopl.core.common.enums.MessageType;
 import com.mopl.realtime.moderation.service.MessageModerationService;
 import com.mopl.realtime.moderation.dto.RuleAction;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +23,7 @@ public class DirectMessageService {
 	private final ConversationRepository conversationRepository;
 	private final DirectMessageRepository directMessageRepository;
 	private final MessageModerationService moderation;
+	private final ApplicationEventPublisher eventPublisher;
 
 	@Transactional
 	public DirectMessageResponse send(
@@ -64,6 +67,10 @@ public class DirectMessageService {
 		if (decision.action() != RuleAction.MASK) {
 			moderation.reviewAfterCommit(senderId, MessageType.DM, conversationId, saved.getId(), content, decision.action());
 		}
+
+		eventPublisher.publishEvent(
+			new DirectMessageReceivedEvent(receiver.getId(), sender.getId())
+		);
 
 		return DirectMessageResponse.from(saved);
 	}

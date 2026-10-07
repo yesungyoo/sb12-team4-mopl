@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.mopl.core.common.enums.ContentType;
+import com.mopl.core.common.event.FollowingWatchStartedEvent;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.core.domain.watchingsession.model.WatchingSessionState;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class WatchingSessionServiceTest {
@@ -45,6 +47,9 @@ class WatchingSessionServiceTest {
 	@Mock
 	private ContentSummaryRepository contentSummaryRepository;
 
+	@Mock
+	private ApplicationEventPublisher eventPublisher;
+
 	private WatchingSessionService watchingSessionService;
 
 	@BeforeEach
@@ -53,7 +58,8 @@ class WatchingSessionServiceTest {
 			watchingSessionRepository,
 			userRepository,
 			contentRepository,
-			contentSummaryRepository
+			contentSummaryRepository,
+			eventPublisher
 		);
 	}
 
@@ -66,8 +72,17 @@ class WatchingSessionServiceTest {
 		void success() {
 			UUID userId = UUID.randomUUID();
 			UUID contentId = UUID.randomUUID();
+			List<UUID> followerIds = List.of(UUID.randomUUID(), UUID.randomUUID());
+			User watcher = mock(User.class);
+			Content content = mock(Content.class);
 
-			mockValidUserAndContent(userId, contentId);
+			when(userRepository.findByIdAndDeletedAtIsNull(userId))
+				.thenReturn(Optional.of(watcher));
+			when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
+				.thenReturn(Optional.of(content));
+			when(userRepository.findFollowerIds(userId)).thenReturn(followerIds);
+			when(watcher.getName()).thenReturn("시청자");
+			when(content.getTitle()).thenReturn("콘텐츠 제목");
 
 			when(watchingSessionRepository.findByUserId(userId))
 				.thenReturn(Optional.empty());
@@ -93,6 +108,9 @@ class WatchingSessionServiceTest {
 
 			assertThat(result.joinedSession()).isEqualTo(saved);
 			assertThat(result.leftSession()).isEmpty();
+			verify(eventPublisher).publishEvent(
+				new FollowingWatchStartedEvent(followerIds, "시청자", "콘텐츠 제목")
+			);
 		}
 
 		@Test
