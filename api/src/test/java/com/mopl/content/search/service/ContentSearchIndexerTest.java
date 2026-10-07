@@ -20,6 +20,7 @@ import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.review.repository.ReviewRepository;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -262,6 +263,105 @@ class ContentSearchIndexerTest {
 
         assertThat(updateQuery.getRefreshPolicy())
                 .isEqualTo(RefreshPolicy.IMMEDIATE);
+
+        verify(contentSearchRepository, never())
+                .save(any(ContentSearchDocument.class));
+    }
+
+    @Test
+    void updateStatisticsUpdatesOnlyStatisticsFieldsForExistingDocument() {
+        UUID contentId = UUID.randomUUID();
+        ContentSearchDocument existingDocument =
+                mock(ContentSearchDocument.class);
+        IndexCoordinates indexCoordinates =
+                IndexCoordinates.of("contents");
+
+        when(contentSearchRepository.findById(contentId.toString()))
+                .thenReturn(Optional.of(existingDocument));
+        when(reviewRepository.findAverageRatingByContentId(contentId))
+                .thenReturn(null);
+        when(reviewRepository.countByContentId(contentId))
+                .thenReturn(7L);
+        when(contentViewRepository.countByContent_Id(contentId))
+                .thenReturn(3L);
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(indexCoordinates);
+
+        contentSearchIndexer.updateStatistics(contentId);
+
+        ArgumentCaptor<UpdateQuery> updateQueryCaptor =
+                ArgumentCaptor.forClass(UpdateQuery.class);
+
+        verify(elasticsearchOperations)
+                .update(
+                        updateQueryCaptor.capture(),
+                        same(indexCoordinates)
+                );
+
+        UpdateQuery updateQuery =
+                updateQueryCaptor.getValue();
+
+        assertThat(updateQuery.getId())
+                .isEqualTo(contentId.toString());
+
+        assertThat(updateQuery.getDocument())
+                .hasSize(3)
+                .containsEntry(
+                        "averageRating",
+                        0.0D
+                )
+                .containsEntry(
+                        "reviewCount",
+                        7L
+                )
+                .containsEntry(
+                        "watcherCount",
+                        3L
+                )
+                .doesNotContainKeys(
+                        "title",
+                        "tags",
+                        "embedding"
+                );
+
+        assertThat(updateQuery.getUpsert())
+                .isNull();
+
+        assertThat(updateQuery.getDocAsUpsert())
+                .isNotEqualTo(Boolean.TRUE);
+
+        assertThat(updateQuery.getRetryOnConflict())
+                .isEqualTo(3);
+
+        assertThat(updateQuery.getRefreshPolicy())
+                .isEqualTo(RefreshPolicy.IMMEDIATE);
+
+        verify(contentSearchRepository, never())
+                .save(any(ContentSearchDocument.class));
+    }
+
+    @Test
+    void updateStatisticsDoesNothingWhenDocumentDoesNotExist() {
+        UUID contentId = UUID.randomUUID();
+
+        when(contentSearchRepository.findById(contentId.toString()))
+                .thenReturn(Optional.empty());
+
+        contentSearchIndexer.updateStatistics(contentId);
+
+        verify(reviewRepository, never())
+                .findAverageRatingByContentId(contentId);
+        verify(reviewRepository, never())
+                .countByContentId(contentId);
+        verify(contentViewRepository, never())
+                .countByContent_Id(contentId);
+
+        verify(elasticsearchOperations, never())
+                .update(
+                        any(UpdateQuery.class),
+                        any(IndexCoordinates.class)
+                );
 
         verify(contentSearchRepository, never())
                 .save(any(ContentSearchDocument.class));

@@ -2,6 +2,8 @@ package com.mopl.content.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.dto.ContentListResponse;
@@ -185,6 +187,47 @@ public class SemanticSearchIntegrationTest {
                 .isEqualTo("Updated Title");
         assertThat(updatedDocument.getEmbedding())
                 .containsExactlyElementsOf(existingEmbedding);
+    }
+
+    @Test
+    void embeddingIndexDoesNotRecreateDeletedElasticsearchDocument() {
+        Content content = createContent(
+                "Deleted Elasticsearch Document",
+                "Content whose search document is deleted"
+        );
+
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(createVector(0)));
+
+        contentEmbeddingIndexer.index(content);
+
+        String documentId =
+                content.getId().toString();
+
+        ContentSearchDocument embeddedDocument =
+                contentSearchRepository
+                        .findById(documentId)
+                        .orElseThrow();
+
+        assertThat(embeddedDocument.getEmbedding())
+                .isNotEmpty();
+
+        contentSearchRepository.deleteById(documentId);
+
+        assertThat(contentSearchRepository.existsById(documentId))
+                .isFalse();
+
+        clearInvocations(embeddingClient);
+
+        contentEmbeddingIndexer.index(content);
+
+        assertThat(contentSearchRepository.existsById(documentId))
+                .isFalse();
+
+        verifyNoInteractions(embeddingClient);
     }
 
     @Test
