@@ -106,6 +106,23 @@ public class ContentSearchDocument {
     public static ContentSearchDocument from(
             Content content,
             List<ContentTag> contentTags,
+            Double averageRating,
+            long reviewCount,
+            long watcherCount
+    ) {
+        return from(
+                content,
+                contentTags,
+                null,
+                averageRating,
+                reviewCount,
+                watcherCount
+        );
+    }
+
+    public static ContentSearchDocument from(
+            Content content,
+            List<ContentTag> contentTags,
             List<Double> embedding,
             Double averageRating,
             long reviewCount,
@@ -115,9 +132,8 @@ public class ContentSearchDocument {
                 .map(ContentTagSearchDocument::from)
                 .toList();
 
-        List<Float> floatEmbedding = embedding.stream()
-                .map(Double::floatValue)
-                .toList();
+        List<Float> floatEmbedding =
+                toFloatEmbedding(embedding);
 
         return new ContentSearchDocument(
                 content.getId().toString(),
@@ -138,6 +154,22 @@ public class ContentSearchDocument {
                 content.getCreatedAt(),
                 floatEmbedding
         );
+    }
+
+    public void updateEmbedding(List<Double> embedding) {
+        this.embedding = toFloatEmbedding(embedding);
+    }
+
+    private static List<Float> toFloatEmbedding(
+            List<Double> embedding
+    ) {
+        if (embedding == null) {
+            return null;
+        }
+
+        return embedding.stream()
+                .map(Double::floatValue)
+                .toList();
     }
 
     public void updateStatistics(

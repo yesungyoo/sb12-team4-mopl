@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import com.mopl.content.dto.ContentListResponse;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.content.search.service.SemanticSearchService;
 import com.mopl.core.common.enums.ContentType;
@@ -38,7 +39,9 @@ import java.util.List;
 @SpringBootTest(properties = {
         "spring.data.redis.host=localhost",
         "spring.data.redis.port=6379",
-        "mopl.elasticsearch.reindex-on-startup=false"
+        "mopl.elasticsearch.reindex-on-startup=false",
+        "mopl.ai.enabled=true",
+        "ai.openai.api-key=test-api-key"
 })
 @Testcontainers
 public class SemanticSearchIntegrationTest {
@@ -66,6 +69,9 @@ public class SemanticSearchIntegrationTest {
 
     @Autowired
     private ContentSearchIndexer contentSearchIndexer;
+
+    @Autowired
+    private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @Autowired
     private SemanticSearchService semanticSearchService;
@@ -117,6 +123,7 @@ public class SemanticSearchIntegrationTest {
         });
 
         long indexedCount = contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         ContentListResponse response =
                 semanticSearchService.search("감동적인 우주 탐험 영화", PageRequest.of(0, 10));

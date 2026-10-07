@@ -33,7 +33,6 @@ public class ContentSearchIndexer {
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
-    private final ContentEmbeddingService contentEmbeddingService;
     private final ReviewRepository reviewRepository;
     private final ContentViewRepository contentViewRepository;
     private final ElasticsearchOperations elasticsearchOperations;
@@ -249,16 +248,9 @@ public class ContentSearchIndexer {
             List<ContentTag> contentTags,
             SearchStatistics statistics
     ) {
-        List<Double> embedding =
-                contentEmbeddingService.embedContent(
-                        content,
-                        contentTags
-                );
-
         return ContentSearchDocument.from(
                 content,
                 contentTags,
-                embedding,
                 statistics.averageRating(),
                 statistics.reviewCount(),
                 statistics.watcherCount()

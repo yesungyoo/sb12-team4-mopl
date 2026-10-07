@@ -2,6 +2,7 @@ package com.mopl.content.search.kafka;
 
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent;
+import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ public class ContentSearchSyncKafkaConsumer {
 
     private final ContentRepository contentRepository;
     private final ContentSearchIndexer contentSearchIndexer;
+    private final ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @KafkaListener(
             topics = ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
@@ -34,7 +36,10 @@ public class ContentSearchSyncKafkaConsumer {
 
             contentRepository.findByIdAndDeletedAtIsNull(event.contentId())
                     .ifPresentOrElse(
-                            contentSearchIndexer::index,
+                            content -> {
+                                contentSearchIndexer.index(content);
+                                contentEmbeddingIndexer.index(content);
+                            },
                             () -> contentSearchIndexer.delete(event.contentId())
                     );
         } catch (RuntimeException e) {

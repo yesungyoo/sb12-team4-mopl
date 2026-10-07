@@ -33,6 +33,7 @@ import com.mopl.content.search.condition.ContentTagCondition;
 import com.mopl.content.search.condition.SemanticCandidateCondition;
 import com.mopl.content.search.dto.ContentCandidate;
 import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.content.search.service.SemanticCandidateSearchService;
 import com.mopl.core.common.enums.ContentType;
@@ -46,7 +47,9 @@ import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 @SpringBootTest(properties = {
         "spring.data.redis.host=localhost",
         "spring.data.redis.port=6379",
-        "mopl.elasticsearch.reindex-on-startup=false"
+        "mopl.elasticsearch.reindex-on-startup=false",
+        "mopl.ai.enabled=true",
+        "ai.openai.api-key=test-api-key"
 })
 @Testcontainers
 public class SemanticCandidateSearchIntegrationTest {
@@ -79,6 +82,9 @@ public class SemanticCandidateSearchIntegrationTest {
 
     @Autowired
     private ContentSearchIndexer contentSearchIndexer;
+
+    @Autowired
+    private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @Autowired
     private SemanticCandidateSearchService semanticCandidateSearchService;
@@ -124,6 +130,7 @@ public class SemanticCandidateSearchIntegrationTest {
         );
 
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         List<ContentCandidate> candidates =
                 semanticCandidateSearchService.search(
@@ -168,6 +175,7 @@ public class SemanticCandidateSearchIntegrationTest {
         );
 
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         SemanticCandidateCondition condition =
                 new SemanticCandidateCondition(
@@ -223,6 +231,7 @@ public class SemanticCandidateSearchIntegrationTest {
         );
 
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         SemanticCandidateCondition condition =
                 new SemanticCandidateCondition(
@@ -295,6 +304,7 @@ public class SemanticCandidateSearchIntegrationTest {
         );
 
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         SemanticCandidateCondition condition =
                 new SemanticCandidateCondition(
@@ -344,6 +354,7 @@ public class SemanticCandidateSearchIntegrationTest {
 
         // [중요] 먼저 ES에는 두 문서 모두 색인
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         // [추가] ES 동기화 이벤트 없이 DB만 soft delete하여
         // MySQL/ES 일시 불일치 상황을 의도적으로 생성
@@ -511,6 +522,7 @@ public class SemanticCandidateSearchIntegrationTest {
         );
 
         contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         // ES에는 남겨두고 MySQL에서만 soft delete
         deletedContent.delete();
