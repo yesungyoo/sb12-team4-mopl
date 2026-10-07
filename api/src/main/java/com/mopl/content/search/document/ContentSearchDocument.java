@@ -168,13 +168,4 @@ public class ContentSearchDocument {
                 .toList();
     }
 
-    public void updateStatistics(
-            Double averageRating,
-            long reviewCount,
-            long watcherCount
-    ) {
-        this.averageRating = averageRating == null ? 0.0 : averageRating;
-        this.reviewCount = reviewCount;
-        this.watcherCount = watcherCount;
-    }
 }
