@@ -1,4 +1,4 @@
-name: CI
+name: Backend CI
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ on:
       - 'gradle/**'
       - 'gradlew'
       - 'gradle.properties'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/backend-ci.yml'
   push:
     branches: [ develop ]
     paths:
@@ -28,7 +28,7 @@ on:
       - 'gradle/**'
       - 'gradlew'
       - 'gradle.properties'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/backend-ci.yml'
 
 jobs:
   build-and-test:
