@@ -17,6 +17,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
@@ -216,13 +217,23 @@ class RecommendationSectionSearchServiceTest {
                 )
                 .doesNotContain(excludedContentId);
 
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+
         verify(
                 elasticsearchOperations,
                 times(2)
         ).search(
-                any(NativeQuery.class),
+                queryCaptor.capture(),
                 eq(ContentSearchDocument.class)
         );
+
+        assertThat(queryCaptor.getAllValues())
+                .allSatisfy(query -> assertThat(
+                        query.getQuery().bool().mustNot()
+                ).singleElement().satisfies(mustNot -> assertThat(
+                        mustNot.ids().values()
+                ).containsExactly(excludedContentId.toString())));
     }
 
     @Test

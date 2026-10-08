@@ -2,13 +2,17 @@ package com.mopl.content.search.service;
 
 import com.mopl.common.exception.CommonErrorCode;
 import com.mopl.common.exception.MoplException;
+import com.mopl.common.exception.content.SemanticSearchUnavailableException;
 import com.mopl.content.dto.ContentListResponse;
 import com.mopl.content.dto.ContentResponse;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
+import com.mopl.infrastructure.ai.exception.AiClientException;
+import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -27,6 +31,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class SemanticSearchService {
 
@@ -37,9 +42,31 @@ public class SemanticSearchService {
     private final EmbeddingClient embeddingClient;
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentRepository contentRepository;
+    private final AiAvailability aiAvailability;
 
     public ContentListResponse search(String query, Pageable pageable) {
-        List<Float> queryVector = createQueryVector(query);
+        if (!aiAvailability.isAvailable()) {
+            log.debug(
+                    "AI를 사용할 수 없어 시맨틱 검색 빈 결과를 반환합니다. reason={}",
+                    aiAvailability.unavailableReason()
+            );
+
+            return emptyResponse(pageable, 0L);
+        }
+
+        List<Float> queryVector;
+
+        try {
+            queryVector = createQueryVector(query);
+        } catch (AiClientException exception) {
+            log.warn(
+                    "OpenAI Embedding API 실패로 시맨틱 검색을 수행할 수 없습니다. "
+                            + "reason=EMBEDDING_API_FAILED",
+                    exception
+            );
+            throw new SemanticSearchUnavailableException();
+        }
+
         NativeQuery nativeQuery = buildKnnQuery(queryVector, pageable);
 
         SearchHits<ContentSearchDocument> searchHits =
@@ -52,8 +79,7 @@ public class SemanticSearchService {
                 .toList();
 
         if (contentIds.isEmpty()) {
-            Page<ContentResponse> emptyPage = new PageImpl<>(List.of(), pageable, searchHits.getTotalHits());
-            return ContentListResponse.from(emptyPage);
+            return emptyResponse(pageable, searchHits.getTotalHits());
         }
 
         List<Content> contents = contentRepository.findAllByIdInAndDeletedAtIsNull(contentIds);
@@ -71,6 +97,16 @@ public class SemanticSearchService {
                 new PageImpl<>(responses, pageable, searchHits.getTotalHits());
 
         return ContentListResponse.from(contentPage);
+    }
+
+    private ContentListResponse emptyResponse(
+            Pageable pageable,
+            long totalHits
+    ) {
+        Page<ContentResponse> emptyPage =
+                new PageImpl<>(List.of(), pageable, totalHits);
+
+        return ContentListResponse.from(emptyPage);
     }
 
     private List<Float> createQueryVector(String query) {

@@ -19,6 +19,7 @@ import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiProperties;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -497,8 +498,10 @@ class ContentEmbeddingIndexerTest {
                 contentSearchRepository,
                 elasticsearchOperations,
                 contentEmbeddingService,
-                aiProperties,
-                aiEnabled
+                new AiAvailability(
+                        aiProperties,
+                        aiEnabled
+                )
         );
     }
 

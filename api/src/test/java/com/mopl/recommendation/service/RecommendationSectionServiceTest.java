@@ -16,6 +16,7 @@ import com.mopl.recommendation.dto.RecommendationPreferredTag;
 import com.mopl.recommendation.dto.RecommendationSectionItem;
 import com.mopl.recommendation.dto.RecommendationSectionsResponse;
 import com.mopl.recommendation.dto.RecommendationTab;
+import com.mopl.recommendation.dto.RecommendationResult;
 import com.mopl.user.repository.UserRepository;
 import java.time.Clock;
 import java.time.Instant;
@@ -292,6 +293,9 @@ class RecommendationSectionServiceTest {
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
 
+        when(recommendationService.getRecommendationResult(userId))
+                .thenReturn(RecommendationResult.popular(List.of()));
+
         when(recommendationSectionSearchService.findPopularByType(
                 eq(ContentType.MOVIE),
                 eq(10),
@@ -317,6 +321,73 @@ class RecommendationSectionServiceTest {
                         "POPULAR_MOVIE",
                         "NEW_MOVIE"
                 );
+    }
+
+    @Test
+    void personalizedHomeUsesPopularLabelWhenRecommendationFallsBack() {
+        UUID userId = UUID.randomUUID();
+        User user = mockUser("소현");
+        UUID interactedContentId = UUID.randomUUID();
+        UUID popularContentId = UUID.randomUUID();
+
+        RecommendationPreference preference =
+                RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(interactedContentId)
+                );
+        RecommendationItem popularRecommendation = recommendationItem(
+                popularContentId,
+                "Popular Movie",
+                ContentType.MOVIE
+        );
+        RecommendationSectionItem popularItem = sectionItem(
+                popularContentId,
+                "Popular Movie",
+                ContentType.MOVIE
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId))
+                .thenReturn(java.util.Optional.of(user));
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(preference);
+        when(recommendationService.getRecommendationResult(userId))
+                .thenReturn(RecommendationResult.popular(
+                        List.of(popularRecommendation)
+                ));
+        when(recommendationSectionSearchService.findByContentIds(
+                List.of(popularContentId)
+        )).thenReturn(List.of(popularItem));
+
+        RecommendationSectionsResponse response =
+                recommendationSectionService.getSections(
+                        userId,
+                        RecommendationTab.HOME
+                );
+
+        assertThat(response.sections().getFirst().key())
+                .isEqualTo("POPULAR");
+        assertThat(response.sections().getFirst().items())
+                .extracting(RecommendationSectionItem::contentId)
+                .containsExactly(popularContentId);
+    }
+
+    @Test
+    void popularFallbackQueriesEachTypeDirectlyAndExcludesInteractions() {
+        assertPopularFallbackTypeTab(
+                RecommendationTab.MOVIE,
+                ContentType.MOVIE,
+                "POPULAR_MOVIE"
+        );
+        assertPopularFallbackTypeTab(
+                RecommendationTab.TV_SERIES,
+                ContentType.TV_SERIES,
+                "POPULAR_TV_SERIES"
+        );
+        assertPopularFallbackTypeTab(
+                RecommendationTab.SPORT,
+                ContentType.SPORT,
+                "POPULAR_SPORT"
+        );
     }
 
     private void assertPersonalizedTypeTab(
@@ -384,8 +455,10 @@ class RecommendationSectionServiceTest {
         when(recommendationPreferenceService.createPreference(userId))
                 .thenReturn(preference);
 
-        when(recommendationService.getRecommendations(userId))
-                .thenReturn(List.of(recommendation));
+        when(recommendationService.getRecommendationResult(userId))
+                .thenReturn(RecommendationResult.personalized(
+                        List.of(recommendation)
+                ));
 
         when(recommendationSectionSearchService.findByContentIds(
                 List.of(personalizedContentId)
@@ -429,6 +502,59 @@ class RecommendationSectionServiceTest {
                                         excludedIds.contains(
                                                 personalizedContentId
                                         )
+                        )
+                );
+    }
+
+    private void assertPopularFallbackTypeTab(
+            RecommendationTab tab,
+            ContentType contentType,
+            String popularKey
+    ) {
+        UUID userId = UUID.randomUUID();
+        User user = mockUser("소현");
+        UUID interactedContentId = UUID.randomUUID();
+        UUID popularContentId = UUID.randomUUID();
+
+        RecommendationPreference preference =
+                RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(interactedContentId)
+                );
+        RecommendationSectionItem popularItem = sectionItem(
+                popularContentId,
+                "Popular",
+                contentType
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId))
+                .thenReturn(java.util.Optional.of(user));
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(preference);
+        when(recommendationService.getRecommendationResult(userId))
+                .thenReturn(RecommendationResult.popular(List.of()));
+        when(recommendationSectionSearchService.findPopularByType(
+                eq(contentType),
+                eq(10),
+                anySet()
+        )).thenReturn(List.of(popularItem));
+
+        RecommendationSectionsResponse response =
+                recommendationSectionService.getSections(userId, tab);
+
+        assertThat(response.sections().getFirst().key())
+                .isEqualTo(popularKey);
+        assertThat(response.sections().getFirst().items())
+                .extracting(RecommendationSectionItem::type)
+                .containsOnly(contentType);
+        verify(recommendationSectionSearchService)
+                .findPopularByType(
+                        eq(contentType),
+                        eq(10),
+                        org.mockito.ArgumentMatchers.argThat(
+                                excludedIds -> excludedIds.contains(
+                                        interactedContentId
+                                )
                         )
                 );
     }

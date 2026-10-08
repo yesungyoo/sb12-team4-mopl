@@ -6,6 +6,8 @@ import com.mopl.common.exception.user.UserErrorCode;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.domain.user.entity.User;
 import com.mopl.recommendation.dto.RecommendationItem;
+import com.mopl.recommendation.dto.RecommendationResult;
+import com.mopl.recommendation.dto.RecommendationResultType;
 import com.mopl.recommendation.dto.RecommendationPreference;
 import com.mopl.recommendation.dto.RecommendationPreferredTag;
 import com.mopl.recommendation.dto.RecommendationSection;
@@ -120,15 +122,21 @@ public class RecommendationSectionService {
     ) {
         List<RecommendationSection> sections = new ArrayList<>();
         Set<UUID> usedContentIds = new LinkedHashSet<>();
+        RecommendationResult recommendationResult =
+                recommendationService.getRecommendationResult(userId);
 
         List<RecommendationSectionItem> recommendationItems =
                 takeUnused(
-                        findRecommendationItems(userId, null),
+                        findRecommendationItems(
+                                recommendationResult,
+                                null
+                        ),
                         usedContentIds
                 );
 
         if (!recommendationItems.isEmpty()) {
-            if (preference.coldStart()) {
+            if (recommendationResult.type()
+                    == RecommendationResultType.POPULAR) {
                 sections.add(
                         createSection(
                                 "POPULAR",
@@ -293,14 +301,16 @@ public class RecommendationSectionService {
     ) {
         List<RecommendationSection> sections = new ArrayList<>();
         Set<UUID> usedContentIds = new LinkedHashSet<>();
+        RecommendationResult recommendationResult =
+                recommendationService.getRecommendationResult(userId);
 
         addTypeRecommendationSection(
                 sections,
                 usedContentIds,
-                userId,
                 userName,
                 contentType,
-                preference
+                preference,
+                recommendationResult
         );
 
         LocalDateTime createdAfter =
@@ -329,17 +339,23 @@ public class RecommendationSectionService {
     private void addTypeRecommendationSection(
             List<RecommendationSection> sections,
             Set<UUID> usedContentIds,
-            UUID userId,
             String userName,
             ContentType contentType,
-            RecommendationPreference preference
+            RecommendationPreference preference,
+            RecommendationResult recommendationResult
     ) {
-        if (preference.coldStart()) {
+        if (recommendationResult.type()
+                == RecommendationResultType.POPULAR) {
+            Set<UUID> excludedContentIds = new LinkedHashSet<>(
+                    preference.interactedContentIds()
+            );
+            excludedContentIds.addAll(usedContentIds);
+
             List<RecommendationSectionItem> popularItems =
                     recommendationSectionSearchService.findPopularByType(
                             contentType,
                             SECTION_SIZE,
-                            Set.copyOf(usedContentIds)
+                            Set.copyOf(excludedContentIds)
                     );
 
             List<RecommendationSectionItem> selectedItems =
@@ -367,7 +383,7 @@ public class RecommendationSectionService {
         List<RecommendationSectionItem> personalizedItems =
                 takeUnused(
                         findRecommendationItems(
-                                userId,
+                                recommendationResult,
                                 contentType
                         ),
                         usedContentIds
@@ -391,11 +407,16 @@ public class RecommendationSectionService {
             return;
         }
 
+        Set<UUID> excludedContentIds = new LinkedHashSet<>(
+                preference.interactedContentIds()
+        );
+        excludedContentIds.addAll(usedContentIds);
+
         List<RecommendationSectionItem> popularItems =
                 recommendationSectionSearchService.findPopularByType(
                         contentType,
                         SECTION_SIZE,
-                        Set.copyOf(usedContentIds)
+                        Set.copyOf(excludedContentIds)
                 );
 
         List<RecommendationSectionItem> selectedItems =
@@ -608,14 +629,11 @@ public class RecommendationSectionService {
     }
 
     private List<RecommendationSectionItem> findRecommendationItems(
-            UUID userId,
+            RecommendationResult recommendationResult,
             ContentType contentType
     ) {
-        List<RecommendationItem> recommendations =
-                recommendationService.getRecommendations(userId);
-
         List<UUID> contentIds =
-                recommendations.stream()
+                recommendationResult.items().stream()
                         .filter(recommendation ->
                                 contentType == null
                                         || recommendation.type() == contentType

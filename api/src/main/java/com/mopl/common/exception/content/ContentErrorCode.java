@@ -13,9 +13,12 @@ public enum ContentErrorCode implements ErrorCode {
              HttpStatus.NOT_FOUND,
              "CONTENT_001",
              "콘텐츠를 찾을 수 없습니다."
+     ),
+     SEMANTIC_SEARCH_UNAVAILABLE(
+             HttpStatus.SERVICE_UNAVAILABLE,
+             "CONTENT_002",
+             "시맨틱 검색을 일시적으로 사용할 수 없습니다."
      );
-
-    ;
 
     private final HttpStatus status;
     private final String code;
