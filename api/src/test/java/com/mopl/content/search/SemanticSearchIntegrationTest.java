@@ -2,11 +2,15 @@ package com.mopl.content.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.dto.ContentListResponse;
 import com.mopl.content.repository.ContentRepository;
+import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.content.search.service.SemanticSearchService;
 import com.mopl.core.common.enums.ContentType;
@@ -38,7 +42,9 @@ import java.util.List;
 @SpringBootTest(properties = {
         "spring.data.redis.host=localhost",
         "spring.data.redis.port=6379",
-        "mopl.elasticsearch.reindex-on-startup=false"
+        "mopl.elasticsearch.reindex-on-startup=false",
+        "mopl.ai.enabled=true",
+        "ai.openai.api-key=test-api-key"
 })
 @Testcontainers
 public class SemanticSearchIntegrationTest {
@@ -66,6 +72,9 @@ public class SemanticSearchIntegrationTest {
 
     @Autowired
     private ContentSearchIndexer contentSearchIndexer;
+
+    @Autowired
+    private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @Autowired
     private SemanticSearchService semanticSearchService;
@@ -117,6 +126,7 @@ public class SemanticSearchIntegrationTest {
         });
 
         long indexedCount = contentSearchIndexer.reindexAll();
+        contentEmbeddingIndexer.reindexAll();
 
         ContentListResponse response =
                 semanticSearchService.search("감동적인 우주 탐험 영화", PageRequest.of(0, 10));
@@ -125,6 +135,99 @@ public class SemanticSearchIntegrationTest {
         assertThat(response.contents()).hasSize(2);
         assertThat(response.contents().getFirst().title()).isEqualTo("Space Journey");
         assertThat(response.contents().get(1).title()).isEqualTo("Cooking Life");
+    }
+
+    @Test
+    void indexPreservesExistingEmbeddingWhenRegenerationFails() {
+        Content content = createContent(
+                "Original Title",
+                "Original description"
+        );
+
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(createVector(0)));
+
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument embeddedDocument =
+                contentSearchRepository
+                        .findById(content.getId().toString())
+                        .orElseThrow();
+
+        assertThat(embeddedDocument.getEmbedding()).isNotEmpty();
+
+        List<Float> existingEmbedding =
+                List.copyOf(embeddedDocument.getEmbedding());
+
+        content.update(
+                null,
+                "Updated Title",
+                null,
+                null,
+                null
+        );
+        contentRepository.saveAndFlush(content);
+
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenThrow(new RuntimeException("embedding failure"));
+
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument updatedDocument =
+                contentSearchRepository
+                        .findById(content.getId().toString())
+                        .orElseThrow();
+
+        assertThat(updatedDocument.getTitle())
+                .isEqualTo("Updated Title");
+        assertThat(updatedDocument.getEmbedding())
+                .containsExactlyElementsOf(existingEmbedding);
+    }
+
+    @Test
+    void embeddingIndexDoesNothingWhenElasticsearchDocumentIsMissing() {
+        Content content = createContent(
+                "Deleted Elasticsearch Document",
+                "Content whose search document is deleted"
+        );
+
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(createVector(0)));
+
+        contentEmbeddingIndexer.index(content);
+
+        String documentId =
+                content.getId().toString();
+
+        ContentSearchDocument embeddedDocument =
+                contentSearchRepository
+                        .findById(documentId)
+                        .orElseThrow();
+
+        assertThat(embeddedDocument.getEmbedding())
+                .isNotEmpty();
+
+        contentSearchRepository.deleteById(documentId);
+
+        assertThat(contentSearchRepository.existsById(documentId))
+                .isFalse();
+
+        clearInvocations(embeddingClient);
+
+        contentEmbeddingIndexer.index(content);
+
+        assertThat(contentSearchRepository.existsById(documentId))
+                .isFalse();
+
+        verifyNoInteractions(embeddingClient);
     }
 
     @Test

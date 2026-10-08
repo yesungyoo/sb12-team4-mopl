@@ -2,6 +2,7 @@ package com.mopl.content.search.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.dto.ContentCreateRequest;
@@ -249,6 +250,8 @@ class ContentKafkaSearchSyncIntegrationTest {
                         created.id()
                 )
         ).isEmpty();
+
+        verifyNoInteractions(embeddingClient);
     }
 
     private void waitForKafkaConsumerAssignment() {

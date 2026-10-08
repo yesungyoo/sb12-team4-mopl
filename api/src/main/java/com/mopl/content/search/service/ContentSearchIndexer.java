@@ -22,6 +22,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -29,11 +33,19 @@ import org.springframework.stereotype.Service;
 public class ContentSearchIndexer {
 
     private static final int BATCH_SIZE = 500;
+    private static final int UPDATE_RETRY_ON_CONFLICT = 3;
+    private static final String UPSERT_PRESERVING_EMBEDDING_SCRIPT = """
+            def embedding = ctx._source.get('embedding');
+            ctx._source.clear();
+            ctx._source.putAll(params.document);
+            if (embedding != null) {
+                ctx._source.put('embedding', embedding);
+            }
+            """;
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
-    private final ContentEmbeddingService contentEmbeddingService;
     private final ReviewRepository reviewRepository;
     private final ContentViewRepository contentViewRepository;
     private final ElasticsearchOperations elasticsearchOperations;
@@ -104,27 +116,95 @@ public class ContentSearchIndexer {
                 statistics
         );
 
-        contentSearchRepository.save(document);
+        upsertPreservingEmbedding(document);
     }
 
     public void updateStatistics(UUID contentId) {
         contentSearchRepository.findById(contentId.toString())
-                .ifPresent(document -> {
+                .ifPresent(ignored -> {
                     SearchStatistics statistics =
                             findStatistics(contentId);
 
-                    document.updateStatistics(
-                            statistics.averageRating(),
-                            statistics.reviewCount(),
+                    Document updateDocument =
+                            Document.create();
+
+                    updateDocument.put(
+                            "averageRating",
+                            statistics.averageRating() == null
+                                    ? 0.0D
+                                    : statistics.averageRating()
+                    );
+                    updateDocument.put(
+                            "reviewCount",
+                            statistics.reviewCount()
+                    );
+                    updateDocument.put(
+                            "watcherCount",
                             statistics.watcherCount()
                     );
 
-                    contentSearchRepository.save(document);
+                    UpdateQuery updateQuery =
+                            UpdateQuery.builder(contentId.toString())
+                                    .withDocument(updateDocument)
+                                    .withRetryOnConflict(
+                                            UPDATE_RETRY_ON_CONFLICT
+                                    )
+                                    .withRefreshPolicy(
+                                            RefreshPolicy.IMMEDIATE
+                                    )
+                                    .build();
+
+                    elasticsearchOperations.update(
+                            updateQuery,
+                            elasticsearchOperations
+                                    .getIndexCoordinatesFor(
+                                            ContentSearchDocument.class
+                                    )
+                    );
                 });
     }
 
     public void delete(UUID contentId) {
         contentSearchRepository.deleteById(contentId.toString());
+    }
+
+    private void upsertPreservingEmbedding(
+            ContentSearchDocument document
+    ) {
+        Document source =
+                elasticsearchOperations
+                        .getElasticsearchConverter()
+                        .mapObject(document);
+
+        source.remove("embedding");
+
+        UpdateQuery updateQuery =
+                UpdateQuery.builder(document.getId())
+                        .withScriptType(
+                                ScriptType.INLINE
+                        )
+                        .withScript(
+                                UPSERT_PRESERVING_EMBEDDING_SCRIPT
+                        )
+                        .withParams(
+                                Map.of("document", source)
+                        )
+                        .withUpsert(source)
+                        .withRetryOnConflict(
+                                UPDATE_RETRY_ON_CONFLICT
+                        )
+                        .withRefreshPolicy(
+                                RefreshPolicy.IMMEDIATE
+                        )
+                        .build();
+
+        elasticsearchOperations.update(
+                updateQuery,
+                elasticsearchOperations
+                        .getIndexCoordinatesFor(
+                                ContentSearchDocument.class
+                        )
+        );
     }
 
     private void recreateIndex() {
@@ -249,16 +329,9 @@ public class ContentSearchIndexer {
             List<ContentTag> contentTags,
             SearchStatistics statistics
     ) {
-        List<Double> embedding =
-                contentEmbeddingService.embedContent(
-                        content,
-                        contentTags
-                );
-
         return ContentSearchDocument.from(
                 content,
                 contentTags,
-                embedding,
                 statistics.averageRating(),
                 statistics.reviewCount(),
                 statistics.watcherCount()
