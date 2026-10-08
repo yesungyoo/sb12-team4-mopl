@@ -167,5 +167,4 @@ public class ContentSearchDocument {
                 .map(Double::floatValue)
                 .toList();
     }
-
 }

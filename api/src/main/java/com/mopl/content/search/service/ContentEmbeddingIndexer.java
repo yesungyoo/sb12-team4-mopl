@@ -76,7 +76,8 @@ public class ContentEmbeddingIndexer {
                     .ifPresentOrElse(
                             ignored -> embedAndUpdate(
                                     content,
-                                    contentTags
+                                    contentTags,
+                                    RefreshPolicy.IMMEDIATE
                             ),
                             () -> log.warn(
                                     "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
@@ -145,7 +146,8 @@ public class ContentEmbeddingIndexer {
 
                     if (embedAndUpdate(
                             content,
-                            contentTags
+                            contentTags,
+                            RefreshPolicy.NONE
                     )) {
                         indexedCount++;
                     }
@@ -161,12 +163,27 @@ public class ContentEmbeddingIndexer {
             );
         }
 
+        try {
+            elasticsearchOperations
+                    .indexOps(
+                            ContentSearchDocument.class
+                    )
+                    .refresh();
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "콘텐츠 embedding 전체 색인 후 Elasticsearch refresh에 실패했습니다. indexedCount={}",
+                    indexedCount,
+                    exception
+            );
+        }
+
         return indexedCount;
     }
 
     private boolean embedAndUpdate(
             Content content,
-            List<ContentTag> contentTags
+            List<ContentTag> contentTags,
+            RefreshPolicy refreshPolicy
     ) {
         try {
             List<Double> embedding =
@@ -201,7 +218,7 @@ public class ContentEmbeddingIndexer {
                                     UPDATE_RETRY_ON_CONFLICT
                             )
                             .withRefreshPolicy(
-                                    RefreshPolicy.IMMEDIATE
+                                    refreshPolicy
                             )
                             .build();
 

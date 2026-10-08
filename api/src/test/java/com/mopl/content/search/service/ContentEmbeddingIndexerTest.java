@@ -3,6 +3,7 @@ package com.mopl.content.search.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -32,6 +33,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
@@ -50,6 +52,9 @@ class ContentEmbeddingIndexerTest {
 
     @Mock
     private ElasticsearchOperations elasticsearchOperations;
+
+    @Mock
+    private IndexOperations indexOperations;
 
     @Mock
     private ContentEmbeddingService contentEmbeddingService;
@@ -421,6 +426,17 @@ class ContentEmbeddingIndexerTest {
                 ContentSearchDocument.class
         )).thenReturn(indexCoordinates);
 
+        when(elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        )).thenReturn(indexOperations);
+
+        doThrow(
+                new RuntimeException(
+                        "Elasticsearch refresh unavailable"
+                )
+        ).when(indexOperations)
+                .refresh();
+
         long indexedCount =
                 contentEmbeddingIndexer.reindexAll();
 
@@ -461,6 +477,12 @@ class ContentEmbeddingIndexerTest {
 
         assertThat(updateQuery.getDocument())
                 .containsOnlyKeys("embedding");
+
+        assertThat(updateQuery.getRefreshPolicy())
+                .isEqualTo(RefreshPolicy.NONE);
+
+        verify(indexOperations)
+                .refresh();
 
         verify(contentSearchRepository, never())
                 .save(any(ContentSearchDocument.class));
