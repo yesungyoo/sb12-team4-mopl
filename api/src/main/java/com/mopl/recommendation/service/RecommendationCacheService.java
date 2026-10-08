@@ -1,7 +1,6 @@
 package com.mopl.recommendation.service;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,7 +13,7 @@ import org.springframework.util.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mopl.recommendation.dto.RecommendationItem;
+import com.mopl.recommendation.dto.RecommendationResult;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,16 +25,16 @@ import lombok.extern.slf4j.Slf4j;
 public class RecommendationCacheService {
 
     private static final String CACHE_KEY_PREFIX = "recommendations:";
-    private static final String CACHE_KEY_VERSION = ":v2";
+    private static final String CACHE_KEY_VERSION = ":v3";
 
-    private static final TypeReference<List<RecommendationItem>> RECOMMENDATION_ITEM_LIST_TYPE =
+    private static final TypeReference<RecommendationResult> RECOMMENDATION_RESULT_TYPE =
             new TypeReference<>() {};
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final RecommendationProperties recommendationProperties;
 
-    public Optional<List<RecommendationItem>> get(UUID userId) {
+    public Optional<RecommendationResult> get(UUID userId) {
         String key = createKey(userId);
 
         try {
@@ -46,12 +45,12 @@ public class RecommendationCacheService {
                 return Optional.empty();
             }
 
-            List<RecommendationItem> recommendations = objectMapper.readValue(
+            RecommendationResult recommendationResult = objectMapper.readValue(
                     cachedValue,
-                    RECOMMENDATION_ITEM_LIST_TYPE
+                    RECOMMENDATION_RESULT_TYPE
             );
 
-            return Optional.of(List.copyOf(recommendations));
+            return Optional.of(recommendationResult);
         } catch (JsonProcessingException e) {
             // 손상되었거나 이전 스키마의 캐시는 제거하고 다음 요청에서 새 추천 생성
             log.warn("개인화 추천 캐시 역직렬화에 실패했습니다. key={}", key, e);
@@ -67,11 +66,16 @@ public class RecommendationCacheService {
         }
     }
 
-    public void save(UUID userId, List<RecommendationItem> recommendations) {
+    public void save(UUID userId, RecommendationResult recommendationResult) {
+        if (recommendationResult == null
+                || recommendationResult.items().isEmpty()) {
+            return;
+        }
+
         String key = createKey(userId);
 
         try {
-            String value = objectMapper.writeValueAsString(recommendations);
+            String value = objectMapper.writeValueAsString(recommendationResult);
 
             redisTemplate.opsForValue().set(
                     key,

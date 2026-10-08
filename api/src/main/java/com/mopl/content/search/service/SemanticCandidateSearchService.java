@@ -24,12 +24,15 @@ import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.dto.ContentCandidate;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
 
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class SemanticCandidateSearchService {
 
@@ -41,6 +44,7 @@ public class SemanticCandidateSearchService {
     private final EmbeddingClient embeddingClient;
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentRepository contentRepository;
+    private final AiAvailability aiAvailability;
 
     public List<ContentCandidate> search(
             String queryText,
@@ -49,6 +53,15 @@ public class SemanticCandidateSearchService {
     ) {
         // 내부 AI 검색 요청 값 검증
         validateSearchRequest(queryText, condition, size);
+
+        if (!aiAvailability.isAvailable()) {
+            log.debug(
+                    "AI를 사용할 수 없어 시맨틱 후보 빈 결과를 반환합니다. reason={}",
+                    aiAvailability.unavailableReason()
+            );
+
+            return List.of();
+        }
 
         List<Float> queryVector = createQueryVector(queryText);
         NativeQuery nativeQuery = buildKnnQuery(queryVector, condition, size);

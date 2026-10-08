@@ -3,6 +3,7 @@ package com.mopl.recommendation.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -35,13 +36,23 @@ public class ColdStartRecommendationService {
     private final RecommendationProperties recommendationProperties;
 
     public List<RecommendationItem> recommend() {
+        return recommend(Set.of());
+    }
+
+    public List<RecommendationItem> recommend(
+            Set<UUID> excludedContentIds
+    ) {
         int candidateSize = recommendationProperties.candidateSize();
         int resultSize = recommendationProperties.resultSize();
         List<RecommendationItem> recommendations = new ArrayList<>();
         int page = 0;
 
         while (recommendations.size() < resultSize) {
-            SearchHits<ContentSearchDocument> searchHits = searchPopularContents(page, candidateSize);
+            SearchHits<ContentSearchDocument> searchHits = searchPopularContents(
+                    page,
+                    candidateSize,
+                    excludedContentIds
+            );
 
             if (searchHits.isEmpty()) {
                 break;
@@ -82,13 +93,32 @@ public class ColdStartRecommendationService {
         return List.copyOf(recommendations);
     }
 
-    private SearchHits<ContentSearchDocument> searchPopularContents(int page, int candidateSize) {
+    private SearchHits<ContentSearchDocument> searchPopularContents(
+            int page,
+            int candidateSize,
+            Set<UUID> excludedContentIds
+    ) {
         NativeQuery query = NativeQuery.builder()
-                .withQuery(Query.of(q -> q.matchAll(matchAll -> matchAll)))
+                .withQuery(buildPopularQuery(excludedContentIds))
                 .withPageable(PageRequest.of(page, candidateSize, buildPopularitySort()))
                 .build();
 
         return elasticsearchOperations.search(query, ContentSearchDocument.class);
+    }
+
+    private Query buildPopularQuery(Set<UUID> excludedContentIds) {
+        if (excludedContentIds == null || excludedContentIds.isEmpty()) {
+            return Query.of(query -> query.matchAll(matchAll -> matchAll));
+        }
+
+        List<String> excludedIds = excludedContentIds.stream()
+                .map(UUID::toString)
+                .toList();
+
+        return Query.of(query -> query.bool(bool -> bool
+                .must(must -> must.matchAll(matchAll -> matchAll))
+                .mustNot(mustNot -> mustNot.ids(ids -> ids.values(excludedIds)))
+        ));
     }
 
     private Sort buildPopularitySort() {

@@ -309,7 +309,8 @@ public class RecommendationSectionSearchService {
                             filters,
                             page,
                             size,
-                            sort
+                            sort,
+                            excludedContentIds
                     );
 
             List<SearchHit<ContentSearchDocument>> hitList =
@@ -351,12 +352,11 @@ public class RecommendationSectionSearchService {
             List<Query> filters,
             int page,
             int pageSize,
-            Sort sort
+            Sort sort,
+            Set<UUID> excludedContentIds
     ) {
         NativeQueryBuilder queryBuilder = NativeQuery.builder()
-                .withQuery(Query.of(
-                        query -> query.matchAll(matchAll -> matchAll)
-                ))
+                .withQuery(buildBaseQuery(excludedContentIds))
                 .withPageable(PageRequest.of(
                         page,
                         pageSize,
@@ -375,6 +375,21 @@ public class RecommendationSectionSearchService {
                 queryBuilder.build(),
                 ContentSearchDocument.class
         );
+    }
+
+    private Query buildBaseQuery(Set<UUID> excludedContentIds) {
+        if (excludedContentIds == null || excludedContentIds.isEmpty()) {
+            return Query.of(query -> query.matchAll(matchAll -> matchAll));
+        }
+
+        List<String> excludedIds = excludedContentIds.stream()
+                .map(UUID::toString)
+                .toList();
+
+        return Query.of(query -> query.bool(bool -> bool
+                .must(must -> must.matchAll(matchAll -> matchAll))
+                .mustNot(mustNot -> mustNot.ids(ids -> ids.values(excludedIds)))
+        ));
     }
 
     private List<Query> buildFilters(

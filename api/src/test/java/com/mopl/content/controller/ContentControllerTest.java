@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mopl.common.exception.content.ContentNotFoundException;
+import com.mopl.common.exception.content.SemanticSearchUnavailableException;
 import com.mopl.content.dto.ContentCreateRequest;
 import com.mopl.content.dto.ContentListItemResponse;
 import com.mopl.content.dto.ContentListResponse;
@@ -277,6 +278,22 @@ class ContentControllerTest {
                         jsonPath("$.totalPages")
                                 .value(1)
                 );
+    }
+
+    @Test
+    @DisplayName("Embedding API 장애 시 시맨틱 검색은 503을 반환한다")
+    void searchSemanticContentReturnsServiceUnavailable() throws Exception {
+        when(semanticSearchService.search(
+                eq("감동적인 우주 탐험 영화"),
+                any(Pageable.class)
+        )).thenThrow(new SemanticSearchUnavailableException());
+
+        mockMvc.perform(
+                        get("/api/contents/semantic-search")
+                                .param("query", "감동적인 우주 탐험 영화")
+                )
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("CONTENT_002"));
     }
 
     @Test

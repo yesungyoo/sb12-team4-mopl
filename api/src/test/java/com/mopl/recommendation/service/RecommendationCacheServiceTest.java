@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -24,13 +25,15 @@ import com.mopl.content.search.dto.ContentTagDto;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.recommendation.config.RecommendationProperties;
 import com.mopl.recommendation.dto.RecommendationItem;
+import com.mopl.recommendation.dto.RecommendationResult;
+import com.mopl.recommendation.dto.RecommendationResultType;
 
 @ExtendWith(MockitoExtension.class)
 class RecommendationCacheServiceTest {
 
-    // [#90 추가]
-    // RecommendationItem 응답 스키마에 thumbnailUrl이 추가되어 캐시 버전을 v2로 변경
-    private static final String CACHE_KEY_VERSION = ":v2";
+    // [#10 수정]
+    // 추천 결과 유형(PERSONALIZED/POPULAR)을 캐시에 포함해 캐시 버전을 v3로 변경
+    private static final String CACHE_KEY_VERSION = ":v3";
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -73,7 +76,7 @@ class RecommendationCacheServiceTest {
         when(valueOperations.get(expectedKey))
                 .thenReturn(null);
 
-        Optional<List<RecommendationItem>> result =
+        Optional<RecommendationResult> result =
                 recommendationCacheService.get(userId);
 
         assertThat(result).isEmpty();
@@ -92,7 +95,7 @@ class RecommendationCacheServiceTest {
         String expectedKey = createExpectedKey(userId);
 
         String cachedValue = objectMapper.writeValueAsString(
-                List.of(recommendation)
+                RecommendationResult.popular(List.of(recommendation))
         );
 
         when(redisTemplate.opsForValue())
@@ -101,16 +104,17 @@ class RecommendationCacheServiceTest {
         when(valueOperations.get(expectedKey))
                 .thenReturn(cachedValue);
 
-        Optional<List<RecommendationItem>> result =
+        Optional<RecommendationResult> result =
                 recommendationCacheService.get(userId);
 
         assertThat(result).isPresent();
 
-        assertThat(result.orElseThrow())
+        assertThat(result.orElseThrow().items())
                 .hasSize(1);
 
         assertThat(
                 result.orElseThrow()
+                        .items()
                         .getFirst()
                         .contentId()
         ).isEqualTo(
@@ -119,11 +123,15 @@ class RecommendationCacheServiceTest {
 
         assertThat(
                 result.orElseThrow()
+                        .items()
                         .getFirst()
                         .reason()
         ).isEqualTo(
                 recommendation.reason()
         );
+
+        assertThat(result.orElseThrow().type())
+                .isEqualTo(RecommendationResultType.POPULAR);
     }
 
     @Test
@@ -140,7 +148,9 @@ class RecommendationCacheServiceTest {
 
         recommendationCacheService.save(
                 userId,
-                List.of(recommendation)
+                RecommendationResult.personalized(
+                        List.of(recommendation)
+                )
         );
 
         verify(valueOperations)
@@ -149,6 +159,18 @@ class RecommendationCacheServiceTest {
                         anyString(),
                         eq(Duration.ofHours(6))
                 );
+    }
+
+    @Test
+    void doesNotSaveEmptyRecommendations() {
+        UUID userId = UUID.randomUUID();
+
+        recommendationCacheService.save(
+                userId,
+                RecommendationResult.popular(List.of())
+        );
+
+        verify(redisTemplate, never()).opsForValue();
     }
 
     @Test
@@ -163,7 +185,7 @@ class RecommendationCacheServiceTest {
         when(valueOperations.get(expectedKey))
                 .thenReturn("{this-is-not-valid-json");
 
-        Optional<List<RecommendationItem>> result =
+        Optional<RecommendationResult> result =
                 recommendationCacheService.get(userId);
 
         assertThat(result).isEmpty();

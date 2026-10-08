@@ -11,12 +11,14 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
@@ -204,5 +206,36 @@ class ColdStartRecommendationServiceTest {
                 .containsExactly(firstContentId, secondContentId);
         verify(elasticsearchOperations, times(2))
                 .search(any(NativeQuery.class), eq(ContentSearchDocument.class));
+    }
+
+    @Test
+    void excludesInteractedContentsInElasticsearchQuery() {
+        UUID interactedContentId = UUID.randomUUID();
+
+        @SuppressWarnings("unchecked")
+        SearchHits<ContentSearchDocument> searchHits = mock(SearchHits.class);
+
+        when(elasticsearchOperations.search(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        when(searchHits.isEmpty()).thenReturn(true);
+
+        coldStartRecommendationService.recommend(
+                Set.of(interactedContentId)
+        );
+
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+
+        verify(elasticsearchOperations).search(
+                queryCaptor.capture(),
+                eq(ContentSearchDocument.class)
+        );
+
+        assertThat(queryCaptor.getValue().getQuery().bool().mustNot())
+                .singleElement()
+                .satisfies(query -> assertThat(query.ids().values())
+                        .containsExactly(interactedContentId.toString()));
     }
 }

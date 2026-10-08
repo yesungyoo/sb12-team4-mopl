@@ -6,7 +6,7 @@ import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
-import com.mopl.infrastructure.ai.config.AiProperties;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -14,7 +14,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -24,7 +23,6 @@ import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
 @Slf4j
 @Service
@@ -38,8 +36,7 @@ public class ContentEmbeddingIndexer {
     private final ContentSearchRepository contentSearchRepository;
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentEmbeddingService contentEmbeddingService;
-    private final AiProperties aiProperties;
-    private final boolean aiEnabled;
+    private final AiAvailability aiAvailability;
 
     public ContentEmbeddingIndexer(
             ContentRepository contentRepository,
@@ -47,21 +44,18 @@ public class ContentEmbeddingIndexer {
             ContentSearchRepository contentSearchRepository,
             ElasticsearchOperations elasticsearchOperations,
             ContentEmbeddingService contentEmbeddingService,
-            AiProperties aiProperties,
-            @Value("${mopl.ai.enabled:false}")
-            boolean aiEnabled
+            AiAvailability aiAvailability
     ) {
         this.contentRepository = contentRepository;
         this.contentTagRepository = contentTagRepository;
         this.contentSearchRepository = contentSearchRepository;
         this.elasticsearchOperations = elasticsearchOperations;
         this.contentEmbeddingService = contentEmbeddingService;
-        this.aiProperties = aiProperties;
-        this.aiEnabled = aiEnabled;
+        this.aiAvailability = aiAvailability;
     }
 
     public void index(Content content) {
-        if (!isAvailable()) {
+        if (!aiAvailability.isAvailable()) {
             return;
         }
 
@@ -94,7 +88,7 @@ public class ContentEmbeddingIndexer {
     }
 
     public long reindexAll() {
-        if (!isAvailable()) {
+        if (!aiAvailability.isAvailable()) {
             return 0L;
         }
 
@@ -290,10 +284,4 @@ public class ContentEmbeddingIndexer {
                 ));
     }
 
-    private boolean isAvailable() {
-        return aiEnabled
-                && StringUtils.hasText(
-                        aiProperties.apiKey()
-                );
-    }
 }

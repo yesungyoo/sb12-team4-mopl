@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,9 @@ import com.mopl.content.search.dto.ContentCandidate;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.recommendation.dto.RecommendationCandidateResult;
 import com.mopl.recommendation.dto.RecommendationItem;
+import com.mopl.recommendation.dto.RecommendationFallbackReason;
+import com.mopl.recommendation.dto.RecommendationResult;
+import com.mopl.recommendation.dto.RecommendationResultType;
 
 @ExtendWith(MockitoExtension.class)
 class RecommendationServiceTest {
@@ -65,7 +69,9 @@ class RecommendationServiceTest {
         when(recommendationCacheService.get(userId))
                 .thenReturn(
                         Optional.of(
-                                List.of(cachedRecommendation)
+                                RecommendationResult.popular(
+                                        List.of(cachedRecommendation)
+                                )
                         )
                 );
 
@@ -97,14 +103,14 @@ class RecommendationServiceTest {
         verify(
                 coldStartRecommendationService,
                 never()
-        ).recommend();
+        ).recommend(any());
 
         verify(
                 recommendationCacheService,
                 never()
         ).save(
                 any(),
-                anyList()
+                any(RecommendationResult.class)
         );
     }
 
@@ -174,12 +180,14 @@ class RecommendationServiceTest {
         verify(
                 coldStartRecommendationService,
                 never()
-        ).recommend();
+        ).recommend(any());
 
         verify(recommendationCacheService)
                 .save(
                         userId,
-                        List.of(recommendation)
+                        RecommendationResult.personalized(
+                                List.of(recommendation)
+                        )
                 );
     }
 
@@ -204,7 +212,7 @@ class RecommendationServiceTest {
                         RecommendationCandidateResult.forColdStart()
                 );
 
-        when(coldStartRecommendationService.recommend())
+        when(coldStartRecommendationService.recommend(Set.of()))
                 .thenReturn(
                         List.of(coldStartRecommendation)
                 );
@@ -220,7 +228,7 @@ class RecommendationServiceTest {
                 );
 
         verify(coldStartRecommendationService)
-                .recommend();
+                .recommend(Set.of());
 
         verify(
                 recommendationRerankService,
@@ -233,8 +241,82 @@ class RecommendationServiceTest {
         verify(recommendationCacheService)
                 .save(
                         userId,
-                        List.of(coldStartRecommendation)
+                        RecommendationResult.popular(
+                                List.of(coldStartRecommendation)
+                        )
                 );
+    }
+
+    @Test
+    void preservesPopularResultTypeOnCacheHit() {
+        UUID userId = UUID.randomUUID();
+        RecommendationResult cachedResult = RecommendationResult.popular(
+                List.of(createRecommendationItem(
+                        UUID.randomUUID(),
+                        "Popular Content"
+                ))
+        );
+
+        when(recommendationCacheService.get(userId))
+                .thenReturn(Optional.of(cachedResult));
+
+        RecommendationResult result =
+                recommendationService.getRecommendationResult(userId);
+
+        assertThat(result.type())
+                .isEqualTo(RecommendationResultType.POPULAR);
+        assertThat(result.items())
+                .containsExactlyElementsOf(cachedResult.items());
+    }
+
+    @Test
+    void doesNotCacheEmptyPopularFallback() {
+        UUID userId = UUID.randomUUID();
+
+        when(recommendationCacheService.get(userId))
+                .thenReturn(Optional.empty());
+        when(recommendationCandidateService.findCandidates(userId))
+                .thenReturn(RecommendationCandidateResult.forColdStart());
+        when(coldStartRecommendationService.recommend(Set.of()))
+                .thenReturn(List.of());
+
+        RecommendationResult result =
+                recommendationService.getRecommendationResult(userId);
+
+        assertThat(result.type()).isEqualTo(RecommendationResultType.POPULAR);
+        assertThat(result.items()).isEmpty();
+        verify(recommendationCacheService, never())
+                .save(any(), any(RecommendationResult.class));
+    }
+
+    @Test
+    void doesNotCacheEmbeddingFailureFallback() {
+        UUID userId = UUID.randomUUID();
+        UUID interactedContentId = UUID.randomUUID();
+        RecommendationItem popularRecommendation = createRecommendationItem(
+                UUID.randomUUID(),
+                "Popular Content"
+        );
+
+        when(recommendationCacheService.get(userId))
+                .thenReturn(Optional.empty());
+        when(recommendationCandidateService.findCandidates(userId))
+                .thenReturn(RecommendationCandidateResult.forPopularFallback(
+                        Set.of(interactedContentId),
+                        RecommendationFallbackReason.EMBEDDING_API_FAILED,
+                        false
+                ));
+        when(coldStartRecommendationService.recommend(
+                Set.of(interactedContentId)
+        )).thenReturn(List.of(popularRecommendation));
+
+        RecommendationResult result =
+                recommendationService.getRecommendationResult(userId);
+
+        assertThat(result.type()).isEqualTo(RecommendationResultType.POPULAR);
+        assertThat(result.items()).containsExactly(popularRecommendation);
+        verify(recommendationCacheService, never())
+                .save(any(), any(RecommendationResult.class));
     }
 
     private ContentCandidate createCandidate(

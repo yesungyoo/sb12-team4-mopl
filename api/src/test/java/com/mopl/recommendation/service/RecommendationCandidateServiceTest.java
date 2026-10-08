@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -24,8 +25,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.mopl.content.search.dto.ContentCandidate;
 import com.mopl.content.search.service.SemanticCandidateSearchService;
 import com.mopl.core.common.enums.ContentType;
+import com.mopl.infrastructure.ai.config.AiAvailability;
+import com.mopl.infrastructure.ai.exception.AiClientException;
 import com.mopl.recommendation.config.RecommendationProperties;
 import com.mopl.recommendation.dto.RecommendationCandidateResult;
+import com.mopl.recommendation.dto.RecommendationFallbackReason;
 import com.mopl.recommendation.dto.RecommendationPreference;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,6 +40,9 @@ class RecommendationCandidateServiceTest {
 
     @Mock
     private SemanticCandidateSearchService semanticCandidateSearchService;
+
+    @Mock
+    private AiAvailability aiAvailability;
 
     private RecommendationProperties recommendationProperties;
 
@@ -56,8 +63,12 @@ class RecommendationCandidateServiceTest {
                 new RecommendationCandidateService(
                         recommendationPreferenceService,
                         semanticCandidateSearchService,
-                        recommendationProperties
+                        recommendationProperties,
+                        aiAvailability
                 );
+
+        lenient().when(aiAvailability.isAvailable())
+                .thenReturn(true);
     }
 
     @Test
@@ -302,6 +313,134 @@ class RecommendationCandidateServiceTest {
                         null,
                         35
                 );
+    }
+
+    @Test
+    void fallsBackToPopularWhenAiIsDisabled() {
+        UUID userId = UUID.randomUUID();
+        UUID interactedContentId = UUID.randomUUID();
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(interactedContentId)
+                ));
+        when(aiAvailability.isAvailable()).thenReturn(false);
+        when(aiAvailability.unavailableReason())
+                .thenReturn(AiAvailability.UnavailableReason.AI_DISABLED);
+
+        RecommendationCandidateResult result =
+                recommendationCandidateService.findCandidates(userId);
+
+        assertThat(result.coldStart()).isTrue();
+        assertThat(result.fallbackReason())
+                .isEqualTo(RecommendationFallbackReason.AI_DISABLED);
+        assertThat(result.interactedContentIds())
+                .containsExactly(interactedContentId);
+        assertThat(result.cacheable()).isTrue();
+
+        verify(semanticCandidateSearchService, never())
+                .search(anyString(), any(), anyInt());
+    }
+
+    @Test
+    void fallsBackToPopularWhenApiKeyIsMissing() {
+        UUID userId = UUID.randomUUID();
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(RecommendationPreference.personalized(
+                        "preference",
+                        Set.of()
+                ));
+        when(aiAvailability.isAvailable()).thenReturn(false);
+        when(aiAvailability.unavailableReason())
+                .thenReturn(AiAvailability.UnavailableReason.API_KEY_MISSING);
+
+        RecommendationCandidateResult result =
+                recommendationCandidateService.findCandidates(userId);
+
+        assertThat(result.fallbackReason())
+                .isEqualTo(RecommendationFallbackReason.API_KEY_MISSING);
+        verify(semanticCandidateSearchService, never())
+                .search(anyString(), any(), anyInt());
+    }
+
+    @Test
+    void fallsBackWithoutCachingWhenEmbeddingApiFails() {
+        UUID userId = UUID.randomUUID();
+        RecommendationPreference preference =
+                RecommendationPreference.personalized(
+                        "preference",
+                        Set.of()
+                );
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(preference);
+        when(semanticCandidateSearchService.search(
+                "preference",
+                null,
+                30
+        )).thenThrow(new AiClientException("embedding failure"));
+
+        RecommendationCandidateResult result =
+                recommendationCandidateService.findCandidates(userId);
+
+        assertThat(result.coldStart()).isTrue();
+        assertThat(result.fallbackReason())
+                .isEqualTo(RecommendationFallbackReason.EMBEDDING_API_FAILED);
+        assertThat(result.cacheable()).isFalse();
+    }
+
+    @Test
+    void fallsBackToPopularWhenSemanticCandidatesAreEmpty() {
+        UUID userId = UUID.randomUUID();
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(RecommendationPreference.personalized(
+                        "preference",
+                        Set.of()
+                ));
+        when(semanticCandidateSearchService.search(
+                "preference",
+                null,
+                30
+        )).thenReturn(List.of());
+
+        RecommendationCandidateResult result =
+                recommendationCandidateService.findCandidates(userId);
+
+        assertThat(result.fallbackReason())
+                .isEqualTo(RecommendationFallbackReason.NO_SEMANTIC_CANDIDATE);
+        assertThat(result.cacheable()).isTrue();
+    }
+
+    @Test
+    void fallsBackToPopularWhenAllCandidatesWereInteractedWith() {
+        UUID userId = UUID.randomUUID();
+        UUID interactedContentId = UUID.randomUUID();
+
+        when(recommendationPreferenceService.createPreference(userId))
+                .thenReturn(RecommendationPreference.personalized(
+                        "preference",
+                        Set.of(interactedContentId)
+                ));
+        when(semanticCandidateSearchService.search(
+                "preference",
+                null,
+                31
+        )).thenReturn(List.of(createCandidate(
+                interactedContentId,
+                "Already Watched",
+                0.99
+        )));
+
+        RecommendationCandidateResult result =
+                recommendationCandidateService.findCandidates(userId);
+
+        assertThat(result.fallbackReason())
+                .isEqualTo(RecommendationFallbackReason.ALL_CANDIDATES_EXCLUDED);
+        assertThat(result.interactedContentIds())
+                .containsExactly(interactedContentId);
     }
 
     private ContentCandidate createCandidate(
