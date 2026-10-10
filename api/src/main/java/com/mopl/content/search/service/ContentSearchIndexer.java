@@ -10,8 +10,12 @@ import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.review.repository.ReviewRepository;
 import com.mopl.review.repository.projection.ContentReviewStatisticsProjection;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -23,7 +27,11 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.BulkOptions;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Service;
@@ -51,11 +59,14 @@ public class ContentSearchIndexer {
     private final ElasticsearchOperations elasticsearchOperations;
 
     public long reindexAll() {
-        recreateIndex();
+        IndexOperations indexOperations = ensureIndexExists();
+        IndexCoordinates indexCoordinates = elasticsearchOperations
+                .getIndexCoordinatesFor(ContentSearchDocument.class);
 
         int pageNumber = 0;
         long indexedCount = 0;
         Page<Content> contentPage;
+        Set<String> activeContentIds = new LinkedHashSet<>();
 
         do {
             Pageable pageable = PageRequest.of(
@@ -67,6 +78,11 @@ public class ContentSearchIndexer {
             contentPage = contentRepository.findAllByDeletedAtIsNull(pageable);
 
             List<Content> contents = contentPage.getContent();
+
+            contents.stream()
+                    .map(Content::getId)
+                    .map(UUID::toString)
+                    .forEach(activeContentIds::add);
 
             Map<UUID, List<ContentTag>> tagsByContentId =
                     findTagsByContentId(contents);
@@ -93,12 +109,25 @@ public class ContentSearchIndexer {
                     .toList();
 
             if (!documents.isEmpty()) {
-                contentSearchRepository.saveAll(documents);
+                bulkUpsertPreservingEmbedding(
+                        documents,
+                        indexCoordinates
+                );
                 indexedCount += documents.size();
             }
 
             pageNumber++;
         } while (contentPage.hasNext());
+
+        indexOperations.refresh();
+
+        Set<String> staleDocumentIds = findStaleDocumentIds(
+                activeContentIds
+        );
+
+        if (deleteStaleDocumentsAfterRecheck(staleDocumentIds)) {
+            indexOperations.refresh();
+        }
 
         return indexedCount;
     }
@@ -116,7 +145,18 @@ public class ContentSearchIndexer {
                 statistics
         );
 
-        upsertPreservingEmbedding(document);
+        IndexCoordinates indexCoordinates = elasticsearchOperations
+                .getIndexCoordinatesFor(ContentSearchDocument.class);
+
+        UpdateQuery updateQuery = createUpsertPreservingEmbeddingQuery(
+                document,
+                RefreshPolicy.IMMEDIATE
+        );
+
+        elasticsearchOperations.update(
+                updateQuery,
+                indexCoordinates
+        );
     }
 
     public void updateStatistics(UUID contentId) {
@@ -168,8 +208,9 @@ public class ContentSearchIndexer {
         contentSearchRepository.deleteById(contentId.toString());
     }
 
-    private void upsertPreservingEmbedding(
-            ContentSearchDocument document
+    private UpdateQuery createUpsertPreservingEmbeddingQuery(
+            ContentSearchDocument document,
+            RefreshPolicy refreshPolicy
     ) {
         Document source =
                 elasticsearchOperations
@@ -178,46 +219,151 @@ public class ContentSearchIndexer {
 
         source.remove("embedding");
 
-        UpdateQuery updateQuery =
-                UpdateQuery.builder(document.getId())
-                        .withScriptType(
-                                ScriptType.INLINE
-                        )
-                        .withScript(
-                                UPSERT_PRESERVING_EMBEDDING_SCRIPT
-                        )
-                        .withParams(
-                                Map.of("document", source)
-                        )
-                        .withUpsert(source)
-                        .withRetryOnConflict(
-                                UPDATE_RETRY_ON_CONFLICT
-                        )
-                        .withRefreshPolicy(
-                                RefreshPolicy.IMMEDIATE
-                        )
-                        .build();
+        return UpdateQuery.builder(document.getId())
+                .withScriptType(
+                        ScriptType.INLINE
+                )
+                .withScript(
+                        UPSERT_PRESERVING_EMBEDDING_SCRIPT
+                )
+                .withParams(
+                        Map.of("document", source)
+                )
+                .withUpsert(source)
+                .withRetryOnConflict(
+                        UPDATE_RETRY_ON_CONFLICT
+                )
+                .withRefreshPolicy(
+                        refreshPolicy
+                )
+                .build();
+    }
 
-        elasticsearchOperations.update(
-                updateQuery,
-                elasticsearchOperations
-                        .getIndexCoordinatesFor(
-                                ContentSearchDocument.class
-                        )
+    private void bulkUpsertPreservingEmbedding(
+            List<ContentSearchDocument> documents,
+            IndexCoordinates indexCoordinates
+    ) {
+        List<UpdateQuery> updateQueries = documents.stream()
+                .map(document -> createUpsertPreservingEmbeddingQuery(
+                        document,
+                        RefreshPolicy.NONE
+                ))
+                .toList();
+
+        BulkOptions bulkOptions = BulkOptions.builder()
+                .withRefreshPolicy(RefreshPolicy.NONE)
+                .build();
+
+        elasticsearchOperations.bulkUpdate(
+                updateQueries,
+                bulkOptions,
+                indexCoordinates
         );
     }
 
-    private void recreateIndex() {
+    private IndexOperations ensureIndexExists() {
         IndexOperations indexOperations =
                 elasticsearchOperations.indexOps(
                         ContentSearchDocument.class
                 );
 
-        if (indexOperations.exists()) {
-            indexOperations.delete();
+        if (!indexOperations.exists()
+                && !indexOperations.createWithMapping()) {
+            throw new IllegalStateException(
+                    "Elasticsearch 콘텐츠 인덱스를 생성하지 못했습니다."
+            );
         }
 
-        indexOperations.createWithMapping();
+        return indexOperations;
+    }
+
+    private Set<String> findStaleDocumentIds(
+            Set<String> activeContentIds
+    ) {
+        Query query = Query.findAll();
+        query.setPageable(PageRequest.of(0, BATCH_SIZE));
+
+        Set<String> staleDocumentIds = new LinkedHashSet<>();
+
+        try (SearchHitsIterator<ContentSearchDocument> searchHits =
+                     elasticsearchOperations.searchForStream(
+                             query,
+                             ContentSearchDocument.class
+                     )) {
+            while (searchHits.hasNext()) {
+                String documentId = searchHits.next().getId();
+
+                if (!activeContentIds.contains(documentId)) {
+                    staleDocumentIds.add(documentId);
+                }
+            }
+        }
+
+        return staleDocumentIds;
+    }
+
+    private boolean deleteStaleDocumentsAfterRecheck(
+            Set<String> staleDocumentIds
+    ) {
+        if (staleDocumentIds.isEmpty()) {
+            return false;
+        }
+
+        List<String> candidates = List.copyOf(staleDocumentIds);
+        Map<String, UUID> candidateIds = candidates.stream()
+                .collect(Collectors.toMap(
+                        Function.identity(),
+                        this::parseDocumentId,
+                        (first, second) -> first,
+                        LinkedHashMap::new
+                ));
+        List<String> deletableDocumentIds = new ArrayList<>();
+
+        for (int start = 0; start < candidates.size(); start += BATCH_SIZE) {
+            int end = Math.min(start + BATCH_SIZE, candidates.size());
+            List<String> candidateBatch = candidates.subList(start, end);
+
+            List<UUID> candidateContentIds = candidateBatch.stream()
+                    .map(candidateIds::get)
+                    .toList();
+
+            Set<UUID> activeCandidateIds = contentRepository
+                    .findAllByIdInAndDeletedAtIsNull(candidateContentIds)
+                    .stream()
+                    .map(Content::getId)
+                    .collect(Collectors.toSet());
+
+            candidateBatch.stream()
+                    .filter(documentId -> !activeCandidateIds.contains(
+                            candidateIds.get(documentId)
+                    ))
+                    .forEach(deletableDocumentIds::add);
+        }
+
+        for (int start = 0; start < deletableDocumentIds.size(); start += BATCH_SIZE) {
+            int end = Math.min(start + BATCH_SIZE, deletableDocumentIds.size());
+            contentSearchRepository.deleteAllById(
+                    deletableDocumentIds.subList(start, end)
+            );
+        }
+
+        return !deletableDocumentIds.isEmpty();
+    }
+
+    private UUID parseDocumentId(String documentId) {
+        try {
+            UUID parsedId = UUID.fromString(documentId);
+            if (!parsedId.toString().equalsIgnoreCase(documentId)) {
+                throw new IllegalArgumentException();
+            }
+            return parsedId;
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw new IllegalStateException(
+                    "Elasticsearch 문서 ID가 유효한 UUID 형식이 아닙니다. documentId="
+                            + documentId,
+                    exception
+            );
+        }
     }
 
     private Map<UUID, List<ContentTag>> findTagsByContentId(
