@@ -191,9 +191,10 @@ class ContentSearchSyncAfterCommitPublisherTest {
                 () -> onlyRegisteredSynchronization().afterCommit()
         ).doesNotThrowAnyException();
         assertThat(output)
-                .contains("확인 시간이 초과")
+                .contains("전송 결과 미확인")
                 .contains(contentId.toString())
-                .contains("timeoutMillis=5");
+                .contains("timeoutMillis=5")
+                .doesNotContain("Kafka 콘텐츠 동기화 이벤트 전송 실패.");
         assertThat(incompleteFuture).isCancelled();
     }
 
@@ -218,9 +219,10 @@ class ContentSearchSyncAfterCommitPublisherTest {
         }
 
         assertThat(output)
-                .contains("전송 결과 확인이 중단")
+                .contains("전송 결과 미확인")
                 .contains(contentId.toString())
-                .contains("대기 스레드 인터럽트");
+                .contains("대기 스레드 인터럽트")
+                .doesNotContain("Kafka 콘텐츠 동기화 이벤트 전송 실패.");
         assertThat(incompleteFuture).isCancelled();
     }
 
@@ -253,7 +255,7 @@ class ContentSearchSyncAfterCommitPublisherTest {
         verify(producer).publish(completedContentId, false);
         assertThat(output)
                 .contains(pendingContentId.toString())
-                .contains("확인 시간이 초과")
+                .contains("전송 결과 미확인")
                 .contains(completedContentId.toString())
                 .contains("브로커 ACK 확인 성공");
     }
@@ -316,7 +318,7 @@ class ContentSearchSyncAfterCommitPublisherTest {
         assertThat(sendStarted.await(100, TimeUnit.MILLISECONDS)).isTrue();
         assertThat(elapsedMillis).isLessThan(500L);
         assertThat(output)
-                .contains("확인 시간이 초과")
+                .contains("전송 결과 미확인")
                 .contains(contentId.toString());
     }
 

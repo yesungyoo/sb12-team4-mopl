@@ -52,7 +52,7 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 	"spring.kafka.bootstrap-servers=127.0.0.1:9092",
 	"spring.kafka.consumer.group-id=kafka-config-integration-test",
 	"mopl.kafka.consumer.retry-interval-ms=100",
-	"mopl.kafka.consumer.retry-max-attempts=2"
+	"mopl.kafka.consumer.retry-max-retries=2"
 })
 @EmbeddedKafka(
 	partitions = 1,

@@ -59,8 +59,11 @@ public class KafkaConfig {
   @Value("${mopl.kafka.consumer.retry-interval-ms:1000}")
   private long consumerRetryIntervalMs;
 
-  @Value("${mopl.kafka.consumer.retry-max-attempts:3}")
-  private long consumerRetryMaxAttempts;
+  @Value(
+      "${mopl.kafka.consumer.retry-max-retries:"
+          + "${mopl.kafka.consumer.retry-max-attempts:3}}"
+  )
+  private long consumerRetryMaxRetries;
 
   // ===== 공통 Producer (API 등에서 KafkaTemplate으로 발행) =====
   @Bean
@@ -128,7 +131,7 @@ public class KafkaConfig {
   ) {
     FixedBackOff retryBackOff = new FixedBackOff(
         consumerRetryIntervalMs,
-        consumerRetryMaxAttempts
+        consumerRetryMaxRetries
     );
     DefaultErrorHandler errorHandler = new DefaultErrorHandler(
         recoverer,
@@ -136,6 +139,7 @@ public class KafkaConfig {
     );
 
     // DeserializationException은 기본 fatal 분류로 즉시 recoverer에 전달된다.
+    // 기본 재시도 3회는 최초 처리 1회와 합쳐 총 4회 처리를 의미한다.
     // 역직렬화 복구만 정상 처리되며 일반 오류는 컨테이너에 파티션 중지를
     // 요청한 뒤 다시 던져 offset을 유지한다.
     // Recoverer 실패 시 backoff 상태가 초기화되지만 파티션 중지 요청이 재전달을

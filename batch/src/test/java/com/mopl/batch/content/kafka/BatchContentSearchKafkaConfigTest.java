@@ -8,6 +8,10 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.serializer.JsonSerializer;
@@ -81,5 +85,43 @@ class BatchContentSearchKafkaConfigTest {
                         ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG,
                         ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
                 );
+    }
+
+    @Test
+    void failsBeanInitializationWhenDeliveryTimeoutIsTooShort() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(TestConfiguration.class)
+                .withPropertyValues(
+                        "spring.kafka.bootstrap-servers=localhost:9092",
+                        "mopl.kafka.producer.request-timeout-ms=5000",
+                        "mopl.kafka.producer.delivery-timeout-ms=4999"
+                )
+                .run(context -> {
+                    assertThat(context).hasFailed();
+
+                    Throwable cause = context.getStartupFailure();
+                    while (cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+
+                    assertThat(cause)
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("delivery.timeout.ms")
+                            .hasMessageContaining("linger.ms")
+                            .hasMessageContaining("request.timeout.ms");
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @Import(BatchContentSearchKafkaConfig.class)
+    static class TestConfiguration {
+
+        @Bean("producerFactory")
+        ProducerFactory<String, Object> producerFactory() {
+            return new DefaultKafkaProducerFactory<>(Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
+                    "localhost:9092"
+            ));
+        }
     }
 }

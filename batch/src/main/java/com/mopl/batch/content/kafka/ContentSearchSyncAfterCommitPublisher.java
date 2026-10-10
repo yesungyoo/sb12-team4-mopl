@@ -197,8 +197,8 @@ public class ContentSearchSyncAfterCommitPublisher {
         if (!future.isDone()) {
             if (waitStatus == CompletionWaitStatus.INTERRUPTED) {
                 log.error(
-                        "Kafka 콘텐츠 동기화 이벤트 전송 결과 확인이 "
-                                + "중단되었습니다. contentId={}, deleted={}, "
+                        "Kafka 콘텐츠 동기화 이벤트 전송 결과 미확인. "
+                                + "contentId={}, deleted={}, "
                                 + "cause={}",
                         target.contentId(),
                         target.deleted(),
@@ -208,13 +208,13 @@ public class ContentSearchSyncAfterCommitPublisher {
             }
 
             log.error(
-                    "Kafka 콘텐츠 동기화 이벤트 전송 결과 확인 시간이 "
-                            + "초과되었습니다. contentId={}, deleted={}, "
+                    "Kafka 콘텐츠 동기화 이벤트 전송 결과 미확인. "
+                            + "contentId={}, deleted={}, "
                             + "timeoutMillis={}, cause={}",
                     target.contentId(),
                     target.deleted(),
                     completionTimeoutMillis,
-                    "설정한 제한 시간 초과"
+                    "제한 시간 내 브로커 ACK 미확인"
             );
             return;
         }

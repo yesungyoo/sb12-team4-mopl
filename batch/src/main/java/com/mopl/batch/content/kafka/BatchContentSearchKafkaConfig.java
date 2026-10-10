@@ -16,6 +16,8 @@ import org.springframework.kafka.core.ProducerFactory;
 @ConditionalOnProperty(prefix = "spring.kafka", name = "bootstrap-servers")
 public class BatchContentSearchKafkaConfig {
 
+    private static final int PRODUCER_LINGER_MS = 0;
+
     @Value("${mopl.kafka.producer.max-block-ms:3000}")
     private long producerMaxBlockMs;
 
@@ -30,6 +32,20 @@ public class BatchContentSearchKafkaConfig {
             @Qualifier("producerFactory")
             ProducerFactory<String, Object> commonProducerFactory
     ) {
+        long minimumDeliveryTimeoutMs = (long) PRODUCER_LINGER_MS
+                + producerRequestTimeoutMs;
+        if (producerDeliveryTimeoutMs < minimumDeliveryTimeoutMs) {
+            throw new IllegalArgumentException(
+                    "Kafka delivery.timeout.ms는 linger.ms와 "
+                            + "request.timeout.ms의 합 이상이어야 합니다. "
+                            + "deliveryTimeoutMs="
+                            + producerDeliveryTimeoutMs
+                            + ", lingerMs=" + PRODUCER_LINGER_MS
+                            + ", requestTimeoutMs="
+                            + producerRequestTimeoutMs
+            );
+        }
+
         Map<String, Object> properties = new HashMap<>(
                 commonProducerFactory.getConfigurationProperties()
         );
@@ -45,7 +61,10 @@ public class BatchContentSearchKafkaConfig {
                 ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG,
                 producerDeliveryTimeoutMs
         );
-        properties.put(ProducerConfig.LINGER_MS_CONFIG, 0);
+        properties.put(
+                ProducerConfig.LINGER_MS_CONFIG,
+                PRODUCER_LINGER_MS
+        );
 
         return new DefaultKafkaProducerFactory<>(properties);
     }

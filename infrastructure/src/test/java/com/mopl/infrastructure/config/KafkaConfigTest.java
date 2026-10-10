@@ -12,6 +12,7 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
@@ -51,9 +52,42 @@ class KafkaConfigTest {
 
         ReflectionTestUtils.setField(
                 kafkaConfig,
-                "consumerRetryMaxAttempts",
+                "consumerRetryMaxRetries",
                 2L
         );
+    }
+
+    @Test
+    void usesRetryMaxRetriesPropertyBeforeLegacyProperty() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(KafkaConfig.class)
+                .withPropertyValues(
+                        "spring.kafka.bootstrap-servers=localhost:9092",
+                        "mopl.kafka.consumer.retry-max-retries=4",
+                        "mopl.kafka.consumer.retry-max-attempts=2"
+                )
+                .run(context -> assertThat(
+                        ReflectionTestUtils.getField(
+                                context.getBean(KafkaConfig.class),
+                                "consumerRetryMaxRetries"
+                        )
+                ).isEqualTo(4L));
+    }
+
+    @Test
+    void supportsLegacyRetryMaxAttemptsProperty() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(KafkaConfig.class)
+                .withPropertyValues(
+                        "spring.kafka.bootstrap-servers=localhost:9092",
+                        "mopl.kafka.consumer.retry-max-attempts=2"
+                )
+                .run(context -> assertThat(
+                        ReflectionTestUtils.getField(
+                                context.getBean(KafkaConfig.class),
+                                "consumerRetryMaxRetries"
+                        )
+                ).isEqualTo(2L));
     }
 
     @Test
