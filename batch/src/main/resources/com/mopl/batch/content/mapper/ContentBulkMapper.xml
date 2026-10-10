@@ -108,4 +108,50 @@
         </foreach>
     </insert>
 
+    <resultMap
+            id="contentSearchSyncRowResultMap"
+            type="com.mopl.batch.content.mapper.ContentSearchSyncRow"
+    >
+        <constructor>
+            <arg column="content_id" javaType="java.lang.String"/>
+            <arg column="external_source" javaType="java.lang.String"/>
+            <arg column="type" javaType="java.lang.String"/>
+            <arg column="external_id" javaType="java.lang.String"/>
+            <arg column="deleted" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <select
+            id="findSearchSyncRows"
+            resultMap="contentSearchSyncRowResultMap"
+    >
+        SELECT
+            c.id AS content_id,
+            c.external_source,
+            c.type,
+            c.external_id,
+            CASE
+                WHEN c.deleted_at IS NULL THEN FALSE
+                ELSE TRUE
+            END AS deleted
+        FROM contents c
+        WHERE (
+            c.external_source,
+            c.type,
+            c.external_id
+        ) IN (
+        <foreach
+                collection="identifiers"
+                item="identifier"
+                separator=","
+        >
+            (
+            #{identifier.externalSource},
+            #{identifier.type},
+            #{identifier.externalId}
+            )
+        </foreach>
+        )
+    </select>
+
 </mapper>

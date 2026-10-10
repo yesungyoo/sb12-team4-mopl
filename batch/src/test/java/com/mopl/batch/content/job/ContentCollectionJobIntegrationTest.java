@@ -1,5 +1,6 @@
 package com.mopl.batch.content.job;
 
+import com.mopl.batch.content.kafka.ContentSearchSyncKafkaProducer;
 import com.mopl.batch.external.sportsdb.client.SportsDbClient;
 import com.mopl.batch.external.sportsdb.dto.SportsDbEvent;
 import com.mopl.batch.external.sportsdb.dto.SportsDbEventsResponse;
@@ -26,10 +27,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
+import org.mockito.ArgumentCaptor;
 
 @Testcontainers
 @SpringBootTest(properties = {
@@ -73,6 +83,9 @@ class ContentCollectionJobIntegrationTest {
     @MockitoBean
     private SportsDbClient sportsDbClient;
 
+    @MockitoBean
+    private ContentSearchSyncKafkaProducer kafkaProducer;
+
     @Test
     void contentCollectionJobCompletes() throws Exception {
         when(tmdbClient.getPopularMovies(1))
@@ -97,6 +110,10 @@ class ContentCollectionJobIntegrationTest {
 
     @Test
     void contentCollectionJobStoresExternalContents() throws Exception {
+        when(kafkaProducer.publish(any(), anyBoolean())).thenReturn(
+                CompletableFuture.completedFuture(null)
+        );
+
         TmdbMovie movie = new TmdbMovie(
                 900001L,
                 "배치 테스트 영화",
@@ -164,9 +181,32 @@ class ContentCollectionJobIntegrationTest {
                 Integer.class
         );
 
+        List<UUID> storedIds = jdbcTemplate.queryForList(
+                """
+                        SELECT id
+                        FROM contents
+                        WHERE (external_source = 'TMDB'
+                            AND external_id IN ('900001', '900002'))
+                            OR (external_source = 'THESPORTSDB'
+                            AND external_id = 'batch-sports-001')
+                        """,
+                String.class
+        ).stream()
+                .map(UUID::fromString)
+                .toList();
+
         assertThat(execution.getStatus())
                 .isEqualTo(BatchStatus.COMPLETED);
         assertThat(count).isEqualTo(3);
+
+        ArgumentCaptor<UUID> contentIdCaptor =
+                ArgumentCaptor.forClass(UUID.class);
+        verify(kafkaProducer, times(3)).publish(
+                contentIdCaptor.capture(),
+                org.mockito.ArgumentMatchers.eq(false)
+        );
+        assertThat(Set.copyOf(contentIdCaptor.getAllValues()))
+                .isEqualTo(Set.copyOf(storedIds));
     }
 
     @Test

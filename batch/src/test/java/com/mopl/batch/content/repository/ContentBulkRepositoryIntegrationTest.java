@@ -1,19 +1,26 @@
 package com.mopl.batch.content.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verify;
 
+import com.mopl.batch.content.kafka.ContentSearchSyncAfterCommitPublisher;
+import com.mopl.batch.content.kafka.ContentSearchSyncTarget;
 import com.mopl.batch.external.common.dto.ExternalContentDto;
 import com.mopl.batch.external.common.dto.ExternalContentTagDto;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -65,6 +72,45 @@ class ContentBulkRepositoryIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @MockitoBean
+    private ContentSearchSyncAfterCommitPublisher afterCommitPublisher;
+
+    @Test
+    void bulkUpsertResolvesGeneratedDatabaseUuidForSyncEvent() {
+        ExternalContentDto content = createContent(
+                "MOVIE",
+                "UUID 조회 테스트",
+                "TMDB",
+                "bulk-uuid-test-001",
+                100.0,
+                4.5
+        );
+
+        contentBulkRepository.upsertAll(List.of(content));
+
+        String storedId = jdbcTemplate.queryForObject(
+                """
+                        SELECT id
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND type = 'MOVIE'
+                            AND external_id = 'bulk-uuid-test-001'
+                        """,
+                String.class
+        );
+
+        ArgumentCaptor<List<ContentSearchSyncTarget>> captor =
+                syncTargetCaptor();
+        verify(afterCommitPublisher).publishAfterCommit(captor.capture());
+
+        assertThat(captor.getValue()).containsExactly(
+                new ContentSearchSyncTarget(
+                        UUID.fromString(storedId),
+                        false
+                )
+        );
+    }
 
     @Test
     void bulkUpsertInsertsNewContents() {
@@ -241,6 +287,19 @@ class ContentBulkRepositoryIntegrationTest {
                 List.of(original)
         );
 
+        String originalId = jdbcTemplate.queryForObject(
+                """
+                        SELECT id
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND type = 'MOVIE'
+                            AND external_id = 'bulk-test-003'
+                        """,
+                String.class
+        );
+
+        clearInvocations(afterCommitPublisher);
+
         ExternalContentDto updated = createContent(
                 "MOVIE",
                 "수정 후 제목",
@@ -287,6 +346,16 @@ class ContentBulkRepositoryIntegrationTest {
         assertThat(count).isEqualTo(1);
         assertThat(title).isEqualTo("수정 후 제목");
         assertThat(rating).isEqualTo(4.8);
+
+        ArgumentCaptor<List<ContentSearchSyncTarget>> captor =
+                syncTargetCaptor();
+        verify(afterCommitPublisher).publishAfterCommit(captor.capture());
+        assertThat(captor.getValue()).containsExactly(
+                new ContentSearchSyncTarget(
+                        UUID.fromString(originalId),
+                        false
+                )
+        );
     }
 
     @Test
@@ -304,6 +373,17 @@ class ContentBulkRepositoryIntegrationTest {
                 List.of(content)
         );
 
+        String contentId = jdbcTemplate.queryForObject(
+                """
+                        SELECT id
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND type = 'MOVIE'
+                            AND external_id = 'bulk-test-004'
+                        """,
+                String.class
+        );
+
         jdbcTemplate.update(
                 """
                         UPDATE contents
@@ -312,6 +392,8 @@ class ContentBulkRepositoryIntegrationTest {
                             AND external_id = 'bulk-test-004'
                         """
         );
+
+        clearInvocations(afterCommitPublisher);
 
         ExternalContentDto collectedAgain =
                 createContent(
@@ -341,6 +423,16 @@ class ContentBulkRepositoryIntegrationTest {
 
         assertThat(deletedCount)
                 .isEqualTo(1);
+
+        ArgumentCaptor<List<ContentSearchSyncTarget>> captor =
+                syncTargetCaptor();
+        verify(afterCommitPublisher).publishAfterCommit(captor.capture());
+        assertThat(captor.getValue()).containsExactly(
+                new ContentSearchSyncTarget(
+                        UUID.fromString(contentId),
+                        true
+                )
+        );
     }
 
     @Test
@@ -438,5 +530,10 @@ class ContentBulkRepositoryIntegrationTest {
                 100L,
                 tags
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private ArgumentCaptor<List<ContentSearchSyncTarget>> syncTargetCaptor() {
+        return ArgumentCaptor.forClass(List.class);
     }
 }
