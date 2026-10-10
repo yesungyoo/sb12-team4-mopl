@@ -33,6 +33,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHitsIterator;
+import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -169,6 +173,31 @@ class ContentSearchIntegrationTest {
                 )
         );
         refreshSearchIndex();
+
+        ContentSearchDocument storedDocument = contentSearchRepository
+                .findById(existingContent.getId().toString())
+                .orElseThrow();
+        assertThat(storedDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .allMatch(value -> value.equals(0.25F));
+
+        Query idOnlyQuery = Query.findAll();
+        idOnlyQuery.addSourceFilter(new FetchSourceFilter(
+                null,
+                new String[]{"id"},
+                null
+        ));
+        try (SearchHitsIterator<ContentSearchDocument> hits =
+                     elasticsearchOperations.searchForStream(
+                             idOnlyQuery,
+                             ContentSearchDocument.class
+                     )) {
+            assertThat(hits.hasNext()).isTrue();
+            SearchHit<ContentSearchDocument> hit = hits.next();
+            assertThat(hit.getId())
+                    .isEqualTo(existingContent.getId().toString());
+            assertThat(hit.getContent().getEmbedding()).isNull();
+        }
 
         existingContent.update(
                 ContentType.MOVIE,

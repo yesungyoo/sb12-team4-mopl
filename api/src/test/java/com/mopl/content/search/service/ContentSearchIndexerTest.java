@@ -119,6 +119,16 @@ class ContentSearchIndexerTest {
         long indexedCount = contentSearchIndexer.reindexAll();
 
         assertThat(indexedCount).isZero();
+        ArgumentCaptor<Query> queryCaptor =
+                ArgumentCaptor.forClass(Query.class);
+        verify(elasticsearchOperations).searchForStream(
+                queryCaptor.capture(),
+                eq(ContentSearchDocument.class)
+        );
+        assertThat(queryCaptor.getValue().getSourceFilter().fetchSource())
+                .isNull();
+        assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
+                .containsExactly("id");
         verify(indexOperations, never()).delete();
         verify(indexOperations, never()).createWithMapping();
         verify(indexOperations, times(1)).refresh();
@@ -447,6 +457,32 @@ class ContentSearchIndexerTest {
                 .findAllByIdInAndDeletedAtIsNull(anyList());
         verify(contentSearchRepository, never()).deleteAllById(anyList());
         verify(indexOperations, times(1)).refresh();
+        verify(searchHitsIterator).close();
+    }
+
+    @Test
+    void reindexAllRejectsUppercaseUuidDocumentIdBeforeDeletingAnyDocument() {
+        String invalidDocumentId = UUID.randomUUID()
+                .toString()
+                .toUpperCase(java.util.Locale.ROOT);
+        SearchHit<ContentSearchDocument> invalidHit =
+                createSearchHit(invalidDocumentId);
+        stubEmptyContentPageAndExistingIndex();
+        when(elasticsearchOperations.searchForStream(
+                any(Query.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHitsIterator);
+        when(searchHitsIterator.hasNext()).thenReturn(true, false);
+        when(searchHitsIterator.next())
+                .thenReturn(invalidHit);
+
+        assertThatThrownBy(contentSearchIndexer::reindexAll)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(invalidDocumentId);
+
+        verify(contentRepository, never())
+                .findAllByIdInAndDeletedAtIsNull(anyList());
+        verify(contentSearchRepository, never()).deleteAllById(anyList());
         verify(searchHitsIterator).close();
     }
 

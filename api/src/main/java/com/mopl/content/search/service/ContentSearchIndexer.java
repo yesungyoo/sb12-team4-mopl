@@ -31,6 +31,7 @@ import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.BulkOptions;
+import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
@@ -282,6 +283,11 @@ public class ContentSearchIndexer {
     ) {
         Query query = Query.findAll();
         query.setPageable(PageRequest.of(0, BATCH_SIZE));
+        query.addSourceFilter(new FetchSourceFilter(
+                null,
+                new String[]{"id"},
+                null
+        ));
 
         Set<String> staleDocumentIds = new LinkedHashSet<>();
 
@@ -353,7 +359,7 @@ public class ContentSearchIndexer {
     private UUID parseDocumentId(String documentId) {
         try {
             UUID parsedId = UUID.fromString(documentId);
-            if (!parsedId.toString().equalsIgnoreCase(documentId)) {
+            if (!parsedId.toString().equals(documentId)) {
                 throw new IllegalArgumentException();
             }
             return parsedId;
