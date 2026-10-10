@@ -1,5 +1,8 @@
 package com.mopl.infrastructure.config;
 
+import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
+import com.mopl.infrastructure.kafka.KafkaDeserializationFailureRecoverer;
+import com.mopl.infrastructure.kafka.KafkaListenerFailureRecoverer;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -13,18 +16,39 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+import org.springframework.util.backoff.FixedBackOff;
 
 @EnableKafka
 @Configuration
 @ConditionalOnProperty(prefix = "spring.kafka", name = "bootstrap-servers")
 public class KafkaConfig {
+
+  static final String CONTENT_SEARCH_SYNC_TYPE_ID = "contentSearchSync";
+
+  static final String LEGACY_CONTENT_SEARCH_SYNC_TYPE_ID =
+      "com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent";
+
+  static final String PRODUCER_TYPE_MAPPINGS =
+      CONTENT_SEARCH_SYNC_TYPE_ID
+          + ":"
+          + ContentSearchSyncKafkaEvent.class.getName();
+
+  static final String CONSUMER_TYPE_MAPPINGS =
+      PRODUCER_TYPE_MAPPINGS
+          + ","
+          + LEGACY_CONTENT_SEARCH_SYNC_TYPE_ID
+          + ":"
+          + ContentSearchSyncKafkaEvent.class.getName();
 
   @Value("${spring.kafka.bootstrap-servers}")
   private String bootstrapServers;
@@ -32,13 +56,23 @@ public class KafkaConfig {
   @Value("${spring.kafka.consumer.group-id:mopl-group}")
   private String groupId;
 
-  // ===== Producer (batch 등에서 KafkaTemplate으로 발행) =====
+  @Value("${mopl.kafka.consumer.retry-interval-ms:1000}")
+  private long consumerRetryIntervalMs;
+
+  @Value(
+      "${mopl.kafka.consumer.retry-max-retries:"
+          + "${mopl.kafka.consumer.retry-max-attempts:3}}"
+  )
+  private long consumerRetryMaxRetries;
+
+  // ===== 공통 Producer (API 등에서 KafkaTemplate으로 발행) =====
   @Bean
   public ProducerFactory<String, Object> producerFactory() {
     Map<String, Object> props = new HashMap<>();
     props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
     props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
     props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+    props.put(JsonSerializer.TYPE_MAPPINGS, PRODUCER_TYPE_MAPPINGS);
     return new DefaultKafkaProducerFactory<>(props);
   }
 
@@ -53,18 +87,77 @@ public class KafkaConfig {
     Map<String, Object> props = new HashMap<>();
     props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
     props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-    props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-    props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
+    props.put(
+        ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+        ErrorHandlingDeserializer.class
+    );
+    props.put(
+        ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+        ErrorHandlingDeserializer.class
+    );
+    props.put(
+        ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS,
+        StringDeserializer.class
+    );
+    props.put(
+        ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS,
+        JsonDeserializer.class
+    );
     props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.mopl.*");
+    props.put(JsonDeserializer.TYPE_MAPPINGS, CONSUMER_TYPE_MAPPINGS);
     props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
     return new DefaultKafkaConsumerFactory<>(props);
   }
 
   @Bean
-  public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory() {
+  public KafkaDeserializationFailureRecoverer kafkaDeserializationFailureRecoverer() {
+    return new KafkaDeserializationFailureRecoverer();
+  }
+
+  @Bean
+  public KafkaListenerFailureRecoverer kafkaListenerFailureRecoverer(
+      KafkaDeserializationFailureRecoverer deserializationFailureRecoverer,
+      KafkaListenerEndpointRegistry listenerEndpointRegistry
+  ) {
+    return new KafkaListenerFailureRecoverer(
+        deserializationFailureRecoverer,
+        listenerEndpointRegistry
+    );
+  }
+
+  @Bean
+  public DefaultErrorHandler kafkaErrorHandler(
+      KafkaListenerFailureRecoverer recoverer
+  ) {
+    FixedBackOff retryBackOff = new FixedBackOff(
+        consumerRetryIntervalMs,
+        consumerRetryMaxRetries
+    );
+    DefaultErrorHandler errorHandler = new DefaultErrorHandler(
+        recoverer,
+        retryBackOff
+    );
+
+    // DeserializationException은 기본 fatal 분류로 즉시 recoverer에 전달된다.
+    // 기본 재시도 3회는 최초 처리 1회와 합쳐 총 4회 처리를 의미한다.
+    // 역직렬화 복구만 정상 처리되며 일반 오류는 컨테이너에 파티션 중지를
+    // 요청한 뒤 다시 던져 offset을 유지한다.
+    // Recoverer 실패 시 backoff 상태가 초기화되지만 파티션 중지 요청이 재전달을
+    // 막고, 운영자가 파티션을 재개하면 처음부터 유한 재시도를 다시 수행한다.
+    errorHandler.setAckAfterHandle(true);
+
+    return errorHandler;
+  }
+
+  @Bean
+  public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory(
+      ConsumerFactory<String, Object> consumerFactory,
+      DefaultErrorHandler kafkaErrorHandler
+  ) {
     ConcurrentKafkaListenerContainerFactory<String, Object> factory =
         new ConcurrentKafkaListenerContainerFactory<>();
-    factory.setConsumerFactory(consumerFactory());
+    factory.setConsumerFactory(consumerFactory);
+    factory.setCommonErrorHandler(kafkaErrorHandler);
     return factory;
   }
 }

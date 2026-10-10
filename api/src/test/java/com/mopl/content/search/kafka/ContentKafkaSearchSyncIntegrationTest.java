@@ -13,6 +13,7 @@ import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.content.service.ContentService;
 import com.mopl.core.common.enums.ContentType;
+import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
 import com.mopl.infrastructure.ai.dto.EmbeddingResponse;

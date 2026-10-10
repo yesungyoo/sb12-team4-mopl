@@ -1,4 +1,4 @@
-package com.mopl.content.search.kafka.event;
+package com.mopl.core.common.kafka;
 
 import java.util.UUID;
 

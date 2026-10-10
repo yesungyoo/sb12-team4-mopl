@@ -4,7 +4,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent;
+import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
+import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.BeforeEach;

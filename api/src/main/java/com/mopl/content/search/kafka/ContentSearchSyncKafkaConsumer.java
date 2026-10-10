@@ -1,9 +1,10 @@
 package com.mopl.content.search.kafka;
 
 import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
+import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
+import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

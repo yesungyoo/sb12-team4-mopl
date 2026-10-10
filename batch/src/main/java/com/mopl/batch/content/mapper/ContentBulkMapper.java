@@ -22,4 +22,9 @@ public interface ContentBulkMapper {
             @Param("contents")
             List<ExternalContentDto> contents
     );
+
+    List<ContentSearchSyncRow> findSearchSyncRows(
+            @Param("identifiers")
+            List<ContentExternalIdentifier> identifiers
+    );
 }

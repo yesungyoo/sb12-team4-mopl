@@ -8,9 +8,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
+import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import com.mopl.core.domain.content.entity.Content;
 import java.util.Optional;
 import java.util.UUID;

@@ -1,6 +1,7 @@
 package com.mopl.content.search.kafka;
 
-import com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent;
+import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
+import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

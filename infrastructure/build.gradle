@@ -20,6 +20,7 @@ dependencies {
 
     // Kafka
     api 'org.springframework.kafka:spring-kafka'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
 
     // AI
     api 'org.springframework.boot:spring-boot-starter-web'
