@@ -127,31 +127,29 @@
     >
         SELECT
             c.id AS content_id,
-            c.external_source,
-            c.type,
-            c.external_id,
+            requested.external_source,
+            requested.type,
+            requested.external_id,
             CASE
                 WHEN c.deleted_at IS NULL THEN FALSE
                 ELSE TRUE
             END AS deleted
-        FROM contents c
-        WHERE (
-            c.external_source,
-            c.type,
-            c.external_id
-        ) IN (
+        FROM (
         <foreach
                 collection="identifiers"
                 item="identifier"
-                separator=","
+                separator=" UNION ALL "
         >
-            (
-            #{identifier.externalSource},
-            #{identifier.type},
-            #{identifier.externalId}
-            )
+            SELECT
+                #{identifier.externalSource} AS external_source,
+                #{identifier.type} AS type,
+                #{identifier.externalId} AS external_id
         </foreach>
-        )
+        ) requested
+        STRAIGHT_JOIN contents c
+            ON c.external_source = requested.external_source
+            AND c.type = requested.type
+            AND c.external_id = requested.external_id
     </select>
 
 </mapper>

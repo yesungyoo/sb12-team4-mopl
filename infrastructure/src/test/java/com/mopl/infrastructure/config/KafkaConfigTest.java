@@ -42,6 +42,18 @@ class KafkaConfigTest {
                 "groupId",
                 "kafka-config-test"
         );
+
+        ReflectionTestUtils.setField(
+                kafkaConfig,
+                "consumerRetryIntervalMs",
+                200L
+        );
+
+        ReflectionTestUtils.setField(
+                kafkaConfig,
+                "consumerRetryMaxAttempts",
+                2L
+        );
     }
 
     @Test
@@ -60,6 +72,13 @@ class KafkaConfigTest {
                         JsonSerializer.TYPE_MAPPINGS
                 )
         ).isEqualTo(KafkaConfig.PRODUCER_TYPE_MAPPINGS);
+
+        assertThat(producerProperties)
+                .doesNotContainKeys(
+                        ProducerConfig.MAX_BLOCK_MS_CONFIG,
+                        ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG,
+                        ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
+                );
 
         Map<String, Object> consumerProperties =
                 consumerProperties();

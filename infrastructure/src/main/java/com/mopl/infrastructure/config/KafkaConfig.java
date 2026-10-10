@@ -2,6 +2,7 @@ package com.mopl.infrastructure.config;
 
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import com.mopl.infrastructure.kafka.KafkaDeserializationFailureRecoverer;
+import com.mopl.infrastructure.kafka.KafkaListenerFailureRecoverer;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
@@ -24,6 +26,7 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+import org.springframework.util.backoff.FixedBackOff;
 
 @EnableKafka
 @Configuration
@@ -53,7 +56,13 @@ public class KafkaConfig {
   @Value("${spring.kafka.consumer.group-id:mopl-group}")
   private String groupId;
 
-  // ===== Producer (batch 등에서 KafkaTemplate으로 발행) =====
+  @Value("${mopl.kafka.consumer.retry-interval-ms:1000}")
+  private long consumerRetryIntervalMs;
+
+  @Value("${mopl.kafka.consumer.retry-max-attempts:3}")
+  private long consumerRetryMaxAttempts;
+
+  // ===== 공통 Producer (API 등에서 KafkaTemplate으로 발행) =====
   @Bean
   public ProducerFactory<String, Object> producerFactory() {
     Map<String, Object> props = new HashMap<>();
@@ -103,13 +112,34 @@ public class KafkaConfig {
   }
 
   @Bean
-  public DefaultErrorHandler kafkaErrorHandler(
-      KafkaDeserializationFailureRecoverer recoverer
+  public KafkaListenerFailureRecoverer kafkaListenerFailureRecoverer(
+      KafkaDeserializationFailureRecoverer deserializationFailureRecoverer,
+      KafkaListenerEndpointRegistry listenerEndpointRegistry
   ) {
-    DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer);
+    return new KafkaListenerFailureRecoverer(
+        deserializationFailureRecoverer,
+        listenerEndpointRegistry
+    );
+  }
+
+  @Bean
+  public DefaultErrorHandler kafkaErrorHandler(
+      KafkaListenerFailureRecoverer recoverer
+  ) {
+    FixedBackOff retryBackOff = new FixedBackOff(
+        consumerRetryIntervalMs,
+        consumerRetryMaxAttempts
+    );
+    DefaultErrorHandler errorHandler = new DefaultErrorHandler(
+        recoverer,
+        retryBackOff
+    );
 
     // DeserializationException은 기본 fatal 분류로 즉시 recoverer에 전달된다.
-    // recoverer가 성공한 레코드는 컨테이너의 기존 ack 전략으로 offset을 진행한다.
+    // 역직렬화 복구만 정상 처리되며 일반 오류는 컨테이너에 파티션 중지를
+    // 요청한 뒤 다시 던져 offset을 유지한다.
+    // Recoverer 실패 시 backoff 상태가 초기화되지만 파티션 중지 요청이 재전달을
+    // 막고, 운영자가 파티션을 재개하면 처음부터 유한 재시도를 다시 수행한다.
     errorHandler.setAckAfterHandle(true);
 
     return errorHandler;

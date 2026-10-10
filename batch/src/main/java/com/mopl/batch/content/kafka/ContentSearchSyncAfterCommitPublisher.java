@@ -30,7 +30,7 @@ public class ContentSearchSyncAfterCommitPublisher {
     public ContentSearchSyncAfterCommitPublisher(
             ObjectProvider<ContentSearchSyncKafkaProducer> producerProvider,
             @Value(
-                    "${batch.content-search-sync.kafka-completion-timeout-ms:10000}"
+                    "${batch.content-search-sync.kafka-completion-timeout-ms:15000}"
             )
             long completionTimeoutMillis
     ) {
@@ -162,6 +162,10 @@ public class ContentSearchSyncAfterCommitPublisher {
             logCompletionResult(pendingSend, waitStatus);
         }
 
+        if (waitStatus != CompletionWaitStatus.COMPLETED) {
+            cancelIncompleteSends(pendingSends);
+        }
+
         log.info(
                 "DB 커밋 후 Kafka 콘텐츠 동기화 이벤트 전송 결과 확인 종료. "
                         + "targetCount={}, timeoutMillis={}, waitStatus={}",
@@ -169,6 +173,17 @@ public class ContentSearchSyncAfterCommitPublisher {
                 completionTimeoutMillis,
                 waitStatus
         );
+    }
+
+    private void cancelIncompleteSends(List<PendingSend> pendingSends) {
+        for (PendingSend pendingSend : pendingSends) {
+            CompletableFuture<SendResult<String, Object>> future =
+                    pendingSend.future();
+
+            if (!future.isDone()) {
+                future.cancel(true);
+            }
+        }
     }
 
     private void logCompletionResult(

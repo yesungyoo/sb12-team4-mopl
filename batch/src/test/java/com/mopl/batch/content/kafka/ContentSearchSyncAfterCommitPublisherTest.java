@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,8 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.kafka.support.SendResult;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -190,6 +194,7 @@ class ContentSearchSyncAfterCommitPublisherTest {
                 .contains("확인 시간이 초과")
                 .contains(contentId.toString())
                 .contains("timeoutMillis=5");
+        assertThat(incompleteFuture).isCancelled();
     }
 
     @Test
@@ -216,6 +221,7 @@ class ContentSearchSyncAfterCommitPublisherTest {
                 .contains("전송 결과 확인이 중단")
                 .contains(contentId.toString())
                 .contains("대기 스레드 인터럽트");
+        assertThat(incompleteFuture).isCancelled();
     }
 
     @Test
@@ -250,6 +256,68 @@ class ContentSearchSyncAfterCommitPublisherTest {
                 .contains("확인 시간이 초과")
                 .contains(completedContentId.toString())
                 .contains("브로커 ACK 확인 성공");
+    }
+
+    @Test
+    void blockedKafkaSendDoesNotDelayBatchBeyondCompletionTimeout(
+            CapturedOutput output
+    ) throws Exception {
+        @SuppressWarnings("unchecked")
+        KafkaTemplate<String, Object> kafkaTemplate =
+                mock(KafkaTemplate.class);
+        CountDownLatch sendStarted = new CountDownLatch(1);
+        CountDownLatch sendInterrupted = new CountDownLatch(1);
+        CountDownLatch releaseSend = new CountDownLatch(1);
+        when(kafkaTemplate.send(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any()
+        )).thenAnswer(invocation -> {
+            sendStarted.countDown();
+            try {
+                releaseSend.await(1, TimeUnit.SECONDS);
+            } catch (InterruptedException exception) {
+                sendInterrupted.countDown();
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(
+                        "Kafka 메타데이터 대기 중단",
+                        exception
+                );
+            }
+            return CompletableFuture.completedFuture(null);
+        });
+
+        ContentSearchSyncKafkaProducer blockingProducer =
+                new ContentSearchSyncKafkaProducer(kafkaTemplate);
+        publisher = new ContentSearchSyncAfterCommitPublisher(
+                producerProvider,
+                20
+        );
+        beginTransactionSynchronization();
+        UUID contentId = UUID.randomUUID();
+        when(producerProvider.getIfAvailable()).thenReturn(blockingProducer);
+        publisher.publishAfterCommit(List.of(
+                new ContentSearchSyncTarget(contentId, false)
+        ));
+
+        long startedAt = System.nanoTime();
+        try {
+            onlyRegisteredSynchronization().afterCommit();
+            assertThat(sendInterrupted.await(500, TimeUnit.MILLISECONDS))
+                    .isTrue();
+        } finally {
+            releaseSend.countDown();
+            blockingProducer.shutdownSendExecutor();
+        }
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - startedAt
+        );
+
+        assertThat(sendStarted.await(100, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(elapsedMillis).isLessThan(500L);
+        assertThat(output)
+                .contains("확인 시간이 초과")
+                .contains(contentId.toString());
     }
 
     @Test

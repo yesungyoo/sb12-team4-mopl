@@ -113,6 +113,67 @@ class ContentBulkRepositoryIntegrationTest {
     }
 
     @Test
+    void bulkUpsertUsesDatabaseCollationForExternalIdLookup() {
+        ExternalContentDto original = createContent(
+                "MOVIE",
+                "대소문자 원본",
+                "TMDB",
+                "Case-Sensitive-Id",
+                100.0,
+                4.5
+        );
+
+        contentBulkRepository.upsertAll(List.of(original));
+
+        String originalId = jdbcTemplate.queryForObject(
+                """
+                        SELECT id
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND type = 'MOVIE'
+                            AND external_id = 'Case-Sensitive-Id'
+                        """,
+                String.class
+        );
+        clearInvocations(afterCommitPublisher);
+
+        ExternalContentDto collectedWithDifferentCase = createContent(
+                "MOVIE",
+                "대소문자 변경 재수집",
+                "TMDB",
+                "case-sensitive-id",
+                110.0,
+                4.6
+        );
+
+        contentBulkRepository.upsertAll(
+                List.of(collectedWithDifferentCase)
+        );
+
+        Integer contentCount = jdbcTemplate.queryForObject(
+                """
+                        SELECT COUNT(*)
+                        FROM contents
+                        WHERE external_source = 'TMDB'
+                            AND type = 'MOVIE'
+                            AND external_id = 'case-sensitive-id'
+                        """,
+                Integer.class
+        );
+        ArgumentCaptor<List<ContentSearchSyncTarget>> captor =
+                syncTargetCaptor();
+        verify(afterCommitPublisher).publishAfterCommit(captor.capture());
+
+        assertThat(contentCount).isEqualTo(1);
+        assertThat(captor.getValue()).containsExactly(
+                new ContentSearchSyncTarget(
+                        UUID.fromString(originalId),
+                        false
+                )
+        );
+    }
+
+    @Test
     void bulkUpsertInsertsNewContents() {
         ExternalContentDto movie = createContent(
                 "MOVIE",

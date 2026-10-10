@@ -6,11 +6,15 @@ import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -46,7 +50,9 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 )
 @TestPropertySource(properties = {
 	"spring.kafka.bootstrap-servers=127.0.0.1:9092",
-	"spring.kafka.consumer.group-id=kafka-config-integration-test"
+	"spring.kafka.consumer.group-id=kafka-config-integration-test",
+	"mopl.kafka.consumer.retry-interval-ms=100",
+	"mopl.kafka.consumer.retry-max-attempts=2"
 })
 @EmbeddedKafka(
 	partitions = 1,
@@ -58,6 +64,9 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 class KafkaConfigIntegrationTest {
 
     static final String TEST_TOPIC = "content-search-sync-contract-test";
+
+    private static final String TEST_LISTENER_ID =
+            "content-search-sync-contract-listener";
 
     private static final String GROUP_ID =
             "kafka-config-integration-test";
@@ -175,6 +184,114 @@ class KafkaConfigIntegrationTest {
         }
     }
 
+    @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
+    void retriesListenerFailureWithIntervalThenPausesWithoutAdvancingOffset()
+            throws Exception {
+        UUID contentId = UUID.randomUUID();
+        int expectedAttempts = 3;
+        testListener.failOn(contentId, expectedAttempts);
+
+        RecordMetadata failedMetadata = sendRaw(
+                KafkaConfig.CONTENT_SEARCH_SYNC_TYPE_ID,
+                contentId,
+                false
+        );
+
+        assertThat(testListener.awaitFailureAttempts())
+                .as("최초 처리 1회와 재시도 2회가 수행되어야 한다.")
+                .isTrue();
+
+        List<Long> attemptTimes = testListener.failureAttemptTimes();
+        assertThat(attemptTimes).hasSize(expectedAttempts);
+        assertThat(
+                TimeUnit.NANOSECONDS.toMillis(
+                        attemptTimes.get(1) - attemptTimes.get(0)
+                )
+        ).isGreaterThanOrEqualTo(50L);
+        assertThat(
+                TimeUnit.NANOSECONDS.toMillis(
+                        attemptTimes.get(2) - attemptTimes.get(1)
+                )
+        ).isGreaterThanOrEqualTo(50L);
+
+        Thread.sleep(400);
+
+        assertThat(testListener.failureAttemptCount())
+                .as("재시도 소진 후 무한 반복하지 않아야 한다.")
+                .isEqualTo(expectedAttempts);
+
+        TopicPartition topicPartition = new TopicPartition(
+                TEST_TOPIC,
+                failedMetadata.partition()
+        );
+        MessageListenerContainer listenerContainer =
+                listenerEndpointRegistry.getListenerContainer(
+                        TEST_LISTENER_ID
+                );
+        assertThat(listenerContainer).isNotNull();
+        MessageListenerContainer partitionContainer =
+                listenerContainer.getContainerFor(
+                        topicPartition.topic(),
+                        topicPartition.partition()
+                );
+        awaitPartitionPauseRequested(partitionContainer, topicPartition);
+
+        listenerContainer.enforceRebalance();
+        Thread.sleep(400);
+
+        MessageListenerContainer reassignedContainer =
+                listenerContainer.getContainerFor(
+                        topicPartition.topic(),
+                        topicPartition.partition()
+                );
+        assertThat(reassignedContainer.isPartitionPauseRequested(topicPartition))
+                .as("재할당 후에도 실패 파티션 중지 요청을 유지해야 한다.")
+                .isTrue();
+        assertThat(testListener.failureAttemptCount())
+                .as("재할당 후 실패 레코드를 다시 호출하면 안 된다.")
+                .isEqualTo(expectedAttempts);
+
+        try (
+                AdminClient adminClient = AdminClient.create(
+                        Map.of(
+                                AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+                                embeddedKafkaBroker.getBrokersAsString()
+                        )
+                )
+        ) {
+            OffsetAndMetadata committed = adminClient
+                    .listConsumerGroupOffsets(GROUP_ID)
+                    .partitionsToOffsetAndMetadata()
+                    .get()
+                    .get(topicPartition);
+
+            assertThat(committed == null
+                    || committed.offset() <= failedMetadata.offset())
+                    .as("일반 Listener 실패 offset은 진행하면 안 된다.")
+                    .isTrue();
+        }
+    }
+
+    private void awaitPartitionPauseRequested(
+            MessageListenerContainer listenerContainer,
+            TopicPartition topicPartition
+    ) throws InterruptedException {
+        long deadline = System.nanoTime() + TIMEOUT.toNanos();
+
+        while (System.nanoTime() < deadline) {
+            if (listenerContainer.isPartitionPauseRequested(topicPartition)) {
+                return;
+            }
+
+            Thread.sleep(50);
+        }
+
+        assertThat(listenerContainer.isPartitionPauseRequested(topicPartition))
+                .as("재시도 소진 후 실패 파티션 중지를 요청해야 한다.")
+                .isTrue();
+    }
+
     private RecordMetadata sendRaw(
             String typeId,
             UUID contentId,
@@ -288,14 +405,52 @@ class KafkaConfigIntegrationTest {
 
         private final BlockingQueue<ContentSearchSyncKafkaEvent> events =
                 new LinkedBlockingQueue<>();
+        private final AtomicInteger failureAttempts = new AtomicInteger();
+        private final List<Long> failureAttemptTimes =
+                new CopyOnWriteArrayList<>();
+        private volatile UUID failedContentId;
+        private volatile CountDownLatch failureAttemptLatch =
+                new CountDownLatch(0);
 
         @KafkaListener(
+                id = TEST_LISTENER_ID,
                 topics = TEST_TOPIC,
                 groupId = GROUP_ID,
                 containerFactory = "kafkaListenerContainerFactory"
         )
         void consume(ContentSearchSyncKafkaEvent event) {
+            if (event.contentId().equals(failedContentId)) {
+                failureAttemptTimes.add(System.nanoTime());
+                failureAttempts.incrementAndGet();
+                failureAttemptLatch.countDown();
+                throw new IllegalStateException(
+                        "테스트용 Elasticsearch 장애"
+                );
+            }
+
             events.add(event);
+        }
+
+        void failOn(UUID contentId, int expectedAttempts) {
+            failedContentId = contentId;
+            failureAttempts.set(0);
+            failureAttemptTimes.clear();
+            failureAttemptLatch = new CountDownLatch(expectedAttempts);
+        }
+
+        boolean awaitFailureAttempts() throws InterruptedException {
+            return failureAttemptLatch.await(
+                    TIMEOUT.toMillis(),
+                    TimeUnit.MILLISECONDS
+            );
+        }
+
+        int failureAttemptCount() {
+            return failureAttempts.get();
+        }
+
+        List<Long> failureAttemptTimes() {
+            return List.copyOf(failureAttemptTimes);
         }
 
         ContentSearchSyncKafkaEvent poll() throws InterruptedException {
@@ -317,6 +472,10 @@ class KafkaConfigIntegrationTest {
 
         void clear() {
             events.clear();
+            failedContentId = null;
+            failureAttempts.set(0);
+            failureAttemptTimes.clear();
+            failureAttemptLatch = new CountDownLatch(0);
         }
     }
 }

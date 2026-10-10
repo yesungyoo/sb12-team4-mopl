@@ -3,6 +3,7 @@ package com.mopl.batch.content.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -53,7 +54,28 @@ class ContentBulkRepositoryTest {
                 contentBulkMapper,
                 afterCommitPublisher
         );
-        when(contentBulkMapper.bulkUpsert(anyList())).thenReturn(1);
+        lenient().when(contentBulkMapper.bulkUpsert(anyList())).thenReturn(1);
+    }
+
+    @Test
+    void rejectsMissingExternalIdsBeforeDatabaseWrite(
+            CapturedOutput output
+    ) {
+        ExternalContentDto nullIdContent = createContent(null);
+        ExternalContentDto blankIdContent = createContent(" ");
+
+        assertThatThrownBy(() -> repository.upsertAll(
+                List.of(nullIdContent, blankIdContent)
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("외부 콘텐츠 ID");
+
+        verify(contentBulkMapper, never()).bulkUpsert(anyList());
+        verify(afterCommitPublisher, never())
+                .publishAfterCommit(anyList());
+        assertThat(output)
+                .contains("외부 콘텐츠 식별자가 없어")
+                .contains("invalidCount=2");
     }
 
     @Test
@@ -77,6 +99,45 @@ class ContentBulkRepositoryTest {
         );
         assertThat(targetCaptor.getValue()).containsExactly(
                 new ContentSearchSyncTarget(existingId, true)
+        );
+    }
+
+    @Test
+    void schedulesSameDatabaseUuidOnlyOnceForCollationEquivalentIds() {
+        ExternalContentDto upperCaseContent =
+                createContent("Case-Sensitive-Id");
+        ExternalContentDto lowerCaseContent =
+                createContent("case-sensitive-id");
+        UUID existingId = UUID.randomUUID();
+
+        when(contentBulkMapper.findSearchSyncRows(anyList()))
+                .thenReturn(List.of(
+                        new ContentSearchSyncRow(
+                                existingId.toString(),
+                                upperCaseContent.externalSource(),
+                                upperCaseContent.type(),
+                                upperCaseContent.externalId(),
+                                false
+                        ),
+                        new ContentSearchSyncRow(
+                                existingId.toString(),
+                                lowerCaseContent.externalSource(),
+                                lowerCaseContent.type(),
+                                lowerCaseContent.externalId(),
+                                false
+                        )
+                ));
+
+        repository.upsertAll(List.of(
+                upperCaseContent,
+                lowerCaseContent
+        ));
+
+        verify(afterCommitPublisher).publishAfterCommit(
+                targetCaptor.capture()
+        );
+        assertThat(targetCaptor.getValue()).containsExactly(
+                new ContentSearchSyncTarget(existingId, false)
         );
     }
 

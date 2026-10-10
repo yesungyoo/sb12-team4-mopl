@@ -6,7 +6,6 @@ import com.mopl.batch.content.mapper.ContentExternalIdentifier;
 import com.mopl.batch.content.mapper.ContentBulkMapper;
 import com.mopl.batch.content.mapper.ContentSearchSyncRow;
 import com.mopl.batch.external.common.dto.ExternalContentDto;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,6 +45,8 @@ public class ContentBulkRepository {
             return 0;
         }
 
+        validateExternalIdentifiers(contents);
+
         int affectedRows =
                 contentBulkMapper.bulkUpsert(contents);
 
@@ -81,6 +82,36 @@ public class ContentBulkRepository {
         );
 
         return affectedRows;
+    }
+
+    private void validateExternalIdentifiers(
+            List<ExternalContentDto> contents
+    ) {
+        List<ContentExternalIdentifier> invalidIdentifiers =
+                contents.stream()
+                        .filter(content ->
+                                content.externalId() == null
+                                        || content.externalId().isBlank()
+                        )
+                        .map(ContentExternalIdentifier::from)
+                        .toList();
+
+        if (invalidIdentifiers.isEmpty()) {
+            return;
+        }
+
+        log.error(
+                "외부 콘텐츠 식별자가 없어 DB 저장과 Kafka 동기화를 "
+                        + "진행할 수 없습니다. invalidCount={}, "
+                        + "sampleIdentifiers={}",
+                invalidIdentifiers.size(),
+                invalidIdentifiers.stream()
+                        .limit(IDENTIFIER_LOG_LIMIT)
+                        .toList()
+        );
+        throw new IllegalArgumentException(
+                "외부 콘텐츠 ID는 null이거나 공백일 수 없습니다."
+        );
     }
 
     private List<ContentSearchSyncTarget> findSearchSyncTargets(
@@ -138,13 +169,11 @@ public class ContentBulkRepository {
             );
         }
 
-        List<ContentSearchSyncTarget> orderedTargets = new ArrayList<>(
-                identifiers.size()
-        );
-        for (ContentExternalIdentifier identifier : identifiers) {
-            orderedTargets.add(targetsById.get(identifier));
-        }
-        return List.copyOf(orderedTargets);
+        return identifiers.stream()
+                .map(targetsById::get)
+                // DB collation상 같은 식별자는 동일 UUID로 조회될 수 있다.
+                .distinct()
+                .toList();
     }
 
     private void addSearchSyncTargets(
