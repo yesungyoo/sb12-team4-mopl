@@ -27,6 +27,7 @@ import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.review.repository.ReviewRepository;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -129,6 +130,8 @@ class ContentSearchIndexerTest {
                 .isNull();
         assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
                 .containsExactly("id");
+        assertThat(queryCaptor.getValue().getSourceFilter().getExcludes())
+                .isEmpty();
         verify(indexOperations, never()).delete();
         verify(indexOperations, never()).createWithMapping();
         verify(indexOperations, times(1)).refresh();
@@ -464,7 +467,7 @@ class ContentSearchIndexerTest {
     void reindexAllRejectsUppercaseUuidDocumentIdBeforeDeletingAnyDocument() {
         String invalidDocumentId = UUID.randomUUID()
                 .toString()
-                .toUpperCase(java.util.Locale.ROOT);
+                .toUpperCase(Locale.ROOT);
         SearchHit<ContentSearchDocument> invalidHit =
                 createSearchHit(invalidDocumentId);
         stubEmptyContentPageAndExistingIndex();

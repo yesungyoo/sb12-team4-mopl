@@ -174,31 +174,6 @@ class ContentSearchIntegrationTest {
         );
         refreshSearchIndex();
 
-        ContentSearchDocument storedDocument = contentSearchRepository
-                .findById(existingContent.getId().toString())
-                .orElseThrow();
-        assertThat(storedDocument.getEmbedding())
-                .hasSize(EMBEDDING_DIMENSIONS)
-                .allMatch(value -> value.equals(0.25F));
-
-        Query idOnlyQuery = Query.findAll();
-        idOnlyQuery.addSourceFilter(new FetchSourceFilter(
-                null,
-                new String[]{"id"},
-                null
-        ));
-        try (SearchHitsIterator<ContentSearchDocument> hits =
-                     elasticsearchOperations.searchForStream(
-                             idOnlyQuery,
-                             ContentSearchDocument.class
-                     )) {
-            assertThat(hits.hasNext()).isTrue();
-            SearchHit<ContentSearchDocument> hit = hits.next();
-            assertThat(hit.getId())
-                    .isEqualTo(existingContent.getId().toString());
-            assertThat(hit.getContent().getEmbedding()).isNull();
-        }
-
         existingContent.update(
                 ContentType.MOVIE,
                 "동기화 후 제목",
@@ -239,6 +214,52 @@ class ContentSearchIntegrationTest {
                 .isEqualTo("신규 콘텐츠");
         assertThat(newDocument.getEmbedding()).isNull();
         verifyNoInteractions(embeddingClient);
+    }
+
+    @Test
+    void idOnlySourceFilterExcludesEmbedding() {
+        Content content = createContent(
+                ContentType.MOVIE,
+                "Source Filter 콘텐츠",
+                "Embedding Source Filter 검증",
+                LocalDate.of(2025, 1, 1),
+                new BigDecimal("100.0"),
+                new BigDecimal("7.0")
+        );
+        contentRepository.saveAndFlush(content);
+
+        List<Double> embedding = Collections.nCopies(
+                EMBEDDING_DIMENSIONS,
+                0.25D
+        );
+        contentSearchRepository.save(ContentSearchDocument.from(
+                content,
+                List.of(),
+                embedding
+        ));
+        refreshSearchIndex();
+
+        ContentSearchDocument storedDocument = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        assertThat(storedDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .allMatch(value -> value.equals(0.25F));
+
+        Query idOnlyQuery = Query.findAll();
+        idOnlyQuery.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
+        ));
+        try (SearchHitsIterator<ContentSearchDocument> hits =
+                     elasticsearchOperations.searchForStream(
+                             idOnlyQuery,
+                             ContentSearchDocument.class
+                     )) {
+            assertThat(hits.hasNext()).isTrue();
+            SearchHit<ContentSearchDocument> hit = hits.next();
+            assertThat(hit.getId()).isEqualTo(content.getId().toString());
+            assertThat(hit.getContent().getEmbedding()).isNull();
+        }
     }
 
     @Test

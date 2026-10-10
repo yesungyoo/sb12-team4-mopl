@@ -283,10 +283,8 @@ public class ContentSearchIndexer {
     ) {
         Query query = Query.findAll();
         query.setPageable(PageRequest.of(0, BATCH_SIZE));
-        query.addSourceFilter(new FetchSourceFilter(
-                null,
-                new String[]{"id"},
-                null
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
         ));
 
         Set<String> staleDocumentIds = new LinkedHashSet<>();
