@@ -1,4 +1,4 @@
-package com.mopl.content.search.kafka;
+package com.mopl.core.common.kafka;
 
 public final class ContentSearchKafkaTopics {
 
