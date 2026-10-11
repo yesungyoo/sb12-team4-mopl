@@ -135,27 +135,28 @@ if [[ -z ${cli_jar:-} ]]; then
     printf '실행 가능한 JAR가 없어 EMBEDDING_BACKFILL을 시작하지 않습니다.\n' >&2
     cli_exit_code=1
 else
-    export MOPL_AI_ENABLED='true'
-    read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY
-    export OPENAI_API_KEY
-    printf '\n'
+    # 서브셸에서만 AI 설정을 변경해 실행 후 부모 셸의 환경변수가 유지되도록 한다.
+    if (
+        export MOPL_AI_ENABLED='true'
+        read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY || exit 2
+        export OPENAI_API_KEY
+        printf '\n'
 
-    export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
-    export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
+        export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
+        export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
 
-    if java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
+        java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL
+    ); then
         cli_exit_code=0
     else
         cli_exit_code=$?
     fi
-
-    unset OPENAI_API_KEY
 fi
 
 printf 'CLI exit code: %d\n' "$cli_exit_code"
 ```
 
-`if`에서 `java -jar`를 실행하면 호출 스크립트가 `set -e`를 사용해도 CLI의 `1`, `2`, `3`을 캡처한 뒤 대응할 수 있습니다. 종료 코드는 다른 외부 명령을 실행하기 전에 `$?`에서 `cli_exit_code`로 보관합니다. 호출 스크립트가 CLI와 같은 코드로 종료해야 한다면 마지막에 다음을 실행하세요. 대화형 셸에서 실행하면 현재 셸이 종료됩니다.
+`if` 조건에서 서브셸을 실행하므로 호출 스크립트에 `set -e`가 설정되어 있어도 CLI 종료 코드를 캡처할 수 있습니다. 서브셸에서 설정한 AI 환경변수는 실행 후 부모 셸에 남지 않습니다. 종료 코드는 다른 외부 명령을 실행하기 전에 `$?`에서 `cli_exit_code`로 보관합니다. 호출 스크립트가 CLI와 같은 코드로 종료해야 한다면 마지막에 다음을 실행하세요. 대화형 셸에서 실행하면 현재 셸이 종료됩니다.
 
 ```bash
 exit "$cli_exit_code"
