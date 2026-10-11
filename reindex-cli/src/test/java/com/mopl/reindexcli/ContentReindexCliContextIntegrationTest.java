@@ -16,6 +16,7 @@ import java.time.Duration;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.web.servlet.server.ServletWebServerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
@@ -58,6 +59,7 @@ class ContentReindexCliContextIntegrationTest {
     @Test
     void cliContextInitializesJpaRepositoriesAndIndexersAgainstIsolatedServices() {
         new ApplicationContextRunner()
+                .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(ContentReindexCliApplication.class)
                 .withPropertyValues(
                         "spring.datasource.url=" + MYSQL.getJdbcUrl(),
@@ -73,10 +75,14 @@ class ContentReindexCliContextIntegrationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
 
+                    EntityManagerFactory entityManagerFactory = context.getBean(
+                            EntityManagerFactory.class
+                    );
+
                     assertThat(context.getBean(ContentRepository.class)).isNotNull();
                     assertThat(context.getBean(ContentTagRepository.class)).isNotNull();
                     assertThat(context.getBean(ContentSearchRepository.class)).isNotNull();
-                    assertThat(context.getBean(EntityManagerFactory.class)).isNotNull();
+                    assertThat(entityManagerFactory).isNotNull();
                     assertThat(context.getBean(ContentSearchIndexer.class)).isNotNull();
                     assertThat(context.getBean(ContentEmbeddingIndexer.class)).isNotNull();
                     assertThat(context.getBean(ContentEmbeddingService.class)).isNotNull();
@@ -96,6 +102,28 @@ class ContentReindexCliContextIntegrationTest {
                     assertThat(context.getEnvironment().getProperty(
                             "spring.jpa.properties.jakarta.persistence.schema-generation.scripts.action"
                     )).isEqualTo("none");
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.application.name"
+                    )).isEqualTo("mopl-api");
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.jpa.properties.hibernate.type.preferred_uuid_jdbc_type"
+                    )).isEqualTo("CHAR");
+                    assertThat(entityManagerFactory.getProperties()).containsEntry(
+                            "hibernate.type.preferred_uuid_jdbc_type",
+                            "CHAR"
+                    );
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.datasource.url"
+                    )).isEqualTo(MYSQL.getJdbcUrl());
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.datasource.username"
+                    )).isEqualTo(MYSQL.getUsername());
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.datasource.password"
+                    )).isEqualTo(MYSQL.getPassword());
+                    assertThat(context.getEnvironment().getProperty(
+                            "spring.elasticsearch.uris"
+                    )).isEqualTo(ELASTICSEARCH.getHttpHostAddress());
 
                     assertThat(context.getBeanNamesForType(
                             ServletWebServerFactory.class
