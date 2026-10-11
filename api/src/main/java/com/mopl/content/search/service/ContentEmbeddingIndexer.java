@@ -8,10 +8,9 @@ import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +31,7 @@ public class ContentEmbeddingIndexer {
 
     private static final int BATCH_SIZE = 500;
     private static final int UPDATE_RETRY_ON_CONFLICT = 3;
+    private static final int SEARCH_SCROLL_BATCH_SIZE = 500;
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
@@ -99,7 +99,7 @@ public class ContentEmbeddingIndexer {
         }
 
         BackfillCounts counts = new BackfillCounts();
-        List<UUID> contentIds = new ArrayList<>(BATCH_SIZE);
+        LinkedHashSet<UUID> uniqueContentIds = new LinkedHashSet<>();
 
         try {
             try (SearchHitsIterator<ContentSearchDocument> searchHits =
@@ -110,18 +110,25 @@ public class ContentEmbeddingIndexer {
                 while (searchHits.hasNext()) {
                     SearchHit<ContentSearchDocument> searchHit =
                             searchHits.next();
-                    contentIds.add(UUID.fromString(searchHit.getId()));
-
-                    if (contentIds.size() == BATCH_SIZE) {
-                        processBatch(contentIds, counts);
-                        contentIds.clear();
+                    try {
+                        UUID contentId = UUID.fromString(searchHit.getId());
+                        if (!uniqueContentIds.add(contentId)) {
+                            counts.skipped++;
+                            log.warn(
+                                    "embedding Backfill 검색 결과에 중복 문서 ID가 있어 건너뜁니다. contentId={}",
+                                    contentId
+                            );
+                        }
+                    } catch (IllegalArgumentException exception) {
+                        counts.skipped++;
+                        log.warn(
+                                "embedding Backfill 검색 결과의 문서 ID가 UUID 형식이 아니어서 건너뜁니다. documentId={}",
+                                searchHit.getId()
+                        );
                     }
                 }
-
-                processBatch(contentIds, counts);
             }
         } catch (RuntimeException exception) {
-            refreshAfterFailure(exception);
             log.error(
                     "콘텐츠 embedding Backfill 조회 또는 스트림 처리가 중단되었습니다. 성공={}, 실패={}, 건너뜀={}",
                     counts.succeeded,
@@ -135,9 +142,29 @@ public class ContentEmbeddingIndexer {
             );
         }
 
-        elasticsearchOperations
-                .indexOps(ContentSearchDocument.class)
-                .refresh();
+        List<UUID> contentIds = new ArrayList<>(uniqueContentIds);
+        for (int start = 0; start < contentIds.size(); start += BATCH_SIZE) {
+            int end = Math.min(start + BATCH_SIZE, contentIds.size());
+            processBatch(contentIds.subList(start, end), counts);
+        }
+
+        try {
+            elasticsearchOperations
+                    .indexOps(ContentSearchDocument.class)
+                    .refresh();
+        } catch (RuntimeException exception) {
+            log.error(
+                    "콘텐츠 embedding Backfill 업데이트는 완료했지만 Elasticsearch refresh에 실패했습니다. 성공={}, 실패={}, 건너뜀={}",
+                    counts.succeeded,
+                    counts.failed,
+                    counts.skipped,
+                    exception
+            );
+            throw new IllegalStateException(
+                    "콘텐츠 embedding 업데이트는 처리되었으나 Elasticsearch refresh에 실패했습니다.",
+                    exception
+            );
+        }
 
         log.info(
                 "콘텐츠 누락 embedding Backfill 완료. 성공={}, 실패={}, 건너뜀={}",
@@ -160,7 +187,8 @@ public class ContentEmbeddingIndexer {
                                 .field("embedding")
                         ))
                 ))
-                .withPageable(PageRequest.of(0, BATCH_SIZE))
+                // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
+                .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
                 .build();
 
         query.addSourceFilter(FetchSourceFilter.of(
@@ -182,10 +210,7 @@ public class ContentEmbeddingIndexer {
                 contentRepository.findAllByIdInAndDeletedAtIsNull(
                         contentIds
                 );
-        Set<UUID> activeContentIds = contents.stream()
-                .map(Content::getId)
-                .collect(Collectors.toCollection(HashSet::new));
-        counts.skipped += contentIds.size() - activeContentIds.size();
+        counts.skipped += contentIds.size() - contents.size();
 
         Map<UUID, List<ContentTag>> tagsByContentId =
                 findTagsByContentId(contents);
@@ -206,16 +231,6 @@ public class ContentEmbeddingIndexer {
             } else {
                 counts.failed++;
             }
-        }
-    }
-
-    private void refreshAfterFailure(RuntimeException failure) {
-        try {
-            elasticsearchOperations
-                    .indexOps(ContentSearchDocument.class)
-                    .refresh();
-        } catch (RuntimeException refreshException) {
-            failure.addSuppressed(refreshException);
         }
     }
 
