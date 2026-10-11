@@ -19,4 +19,9 @@ dependencies {
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     testRuntimeOnly 'com.h2database:h2'
+    testImplementation 'org.flywaydb:flyway-core'
+    testImplementation 'org.flywaydb:flyway-mysql'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:mysql'
+    testImplementation 'org.testcontainers:elasticsearch'
 }
