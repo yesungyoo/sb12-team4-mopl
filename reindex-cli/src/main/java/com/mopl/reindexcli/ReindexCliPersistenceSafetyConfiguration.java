@@ -1,6 +1,5 @@
 package com.mopl.reindexcli;
 
-import java.util.Map;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
