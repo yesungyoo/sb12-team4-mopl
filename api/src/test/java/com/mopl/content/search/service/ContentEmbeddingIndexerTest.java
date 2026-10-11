@@ -2,12 +2,16 @@ package com.mopl.content.search.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.same;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -21,8 +25,10 @@ import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiProperties;
 import com.mopl.infrastructure.ai.config.AiAvailability;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,13 +36,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 
 @ExtendWith(MockitoExtension.class)
@@ -71,9 +77,6 @@ class ContentEmbeddingIndexerTest {
 
     @Mock
     private ContentSearchDocument document;
-
-    @Mock
-    private Page<Content> contentPage;
 
     private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
@@ -324,47 +327,25 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
-    void reindexAllReturnsSuccessfullyIndexedEmbeddingCount() {
+    void reindexAllQueriesOnlyMissingEmbeddingsAndCountsOutcomes() {
         enableAi();
 
         Content firstContent = mock(Content.class);
         Content secondContent = mock(Content.class);
         Content thirdContent = mock(Content.class);
-
-        ContentTag firstContentTag =
-                mock(ContentTag.class);
-
-        ContentSearchDocument firstDocument =
-                mock(ContentSearchDocument.class);
-        ContentSearchDocument secondDocument =
-                mock(ContentSearchDocument.class);
-        ContentSearchDocument thirdDocument =
-                mock(ContentSearchDocument.class);
-
         UUID firstContentId = UUID.randomUUID();
         UUID secondContentId = UUID.randomUUID();
         UUID thirdContentId = UUID.randomUUID();
+        UUID deletedContentId = UUID.randomUUID();
         IndexCoordinates indexCoordinates =
                 IndexCoordinates.of("contents");
-
-        List<Content> contents = List.of(
-                firstContent,
-                secondContent,
-                thirdContent
-        );
-
-        List<UUID> contentIds = List.of(
-                firstContentId,
-                secondContentId,
-                thirdContentId
-        );
-
-        List<String> documentIds = contentIds.stream()
-                .map(UUID::toString)
-                .toList();
-
-        List<Double> firstEmbedding =
-                List.of(0.1D, 0.2D);
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                createSearchHitsIterator(List.of(
+                        firstContentId,
+                        secondContentId,
+                        thirdContentId,
+                        deletedContentId
+                ));
 
         when(firstContent.getId())
                 .thenReturn(firstContentId);
@@ -372,44 +353,25 @@ class ContentEmbeddingIndexerTest {
                 .thenReturn(secondContentId);
         when(thirdContent.getId())
                 .thenReturn(thirdContentId);
-
-        when(contentPage.getContent())
-                .thenReturn(contents);
-        when(contentPage.hasNext())
-                .thenReturn(false);
-
-        when(contentRepository.findAllByDeletedAtIsNull(
-                PageRequest.of(
-                        0,
-                        500,
-                        Sort.by(Sort.Direction.ASC, "id")
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        when(contentRepository.findAllByIdInAndDeletedAtIsNull(
+                List.of(
+                        firstContentId,
+                        secondContentId,
+                        thirdContentId,
+                        deletedContentId
                 )
-        )).thenReturn(contentPage);
-
-        when(contentTagRepository.findAllByContentIds(contentIds))
-                .thenReturn(List.of(firstContentTag));
-
-        when(firstContentTag.getContent())
-                .thenReturn(firstContent);
-
-        when(contentSearchRepository.findAllById(documentIds))
-                .thenReturn(List.of(
-                        firstDocument,
-                        secondDocument,
-                        thirdDocument
-                ));
-
-        when(firstDocument.getId())
-                .thenReturn(firstContentId.toString());
-        when(secondDocument.getId())
-                .thenReturn(secondContentId.toString());
-        when(thirdDocument.getId())
-                .thenReturn(thirdContentId.toString());
+        )).thenReturn(List.of(firstContent, secondContent, thirdContent));
+        when(contentTagRepository.findAllByContentIds(anyCollection()))
+                .thenReturn(List.of());
 
         when(contentEmbeddingService.embedContent(
                 firstContent,
-                List.of(firstContentTag)
-        )).thenReturn(firstEmbedding);
+                List.of()
+        )).thenReturn(List.of(0.1D, 0.2D));
 
         when(contentEmbeddingService.embedContent(
                 secondContent,
@@ -421,7 +383,7 @@ class ContentEmbeddingIndexerTest {
         when(contentEmbeddingService.embedContent(
                 thirdContent,
                 List.of()
-        )).thenReturn(List.of());
+        )).thenReturn(List.of(0.3D, 0.4D));
 
         when(elasticsearchOperations.getIndexCoordinatesFor(
                 ContentSearchDocument.class
@@ -431,62 +393,151 @@ class ContentEmbeddingIndexerTest {
                 ContentSearchDocument.class
         )).thenReturn(indexOperations);
 
-        doThrow(
-                new RuntimeException(
-                        "Elasticsearch refresh unavailable"
-                )
-        ).when(indexOperations)
-                .refresh();
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
 
-        long indexedCount =
-                contentEmbeddingIndexer.reindexAll();
+        assertThat(result.succeeded()).isEqualTo(2L);
+        assertThat(result.failed()).isEqualTo(1L);
+        assertThat(result.skipped()).isEqualTo(1L);
 
-        assertThat(indexedCount).isEqualTo(1L);
-
-        verify(contentRepository)
-                .findAllByDeletedAtIsNull(
-                        PageRequest.of(
-                                0,
-                                500,
-                                Sort.by(
-                                        Sort.Direction.ASC,
-                                        "id"
-                                )
-                        )
-                );
-
-        verify(contentTagRepository)
-                .findAllByContentIds(contentIds);
-
-        verify(contentSearchRepository)
-                .findAllById(documentIds);
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+        verify(elasticsearchOperations).searchForStream(
+                queryCaptor.capture(),
+                eq(ContentSearchDocument.class)
+        );
+        assertThat(queryCaptor.getValue().getQuery().bool().mustNot())
+                .singleElement()
+                .satisfies(mustNot -> assertThat(mustNot.exists().field())
+                        .isEqualTo("embedding"));
+        assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
+                .containsExactly("id");
+        assertThat(queryCaptor.getValue().getSourceFilter().getExcludes())
+                .isEmpty();
 
         ArgumentCaptor<UpdateQuery> updateQueryCaptor =
                 ArgumentCaptor.forClass(UpdateQuery.class);
 
-        verify(elasticsearchOperations)
+        verify(elasticsearchOperations, times(2))
                 .update(
                         updateQueryCaptor.capture(),
                         same(indexCoordinates)
                 );
 
-        UpdateQuery updateQuery =
-                updateQueryCaptor.getValue();
+        assertThat(updateQueryCaptor.getAllValues())
+                .extracting(UpdateQuery::getId)
+                .containsExactlyInAnyOrder(
+                        firstContentId.toString(),
+                        thirdContentId.toString()
+                );
+        assertThat(updateQueryCaptor.getAllValues())
+                .allSatisfy(updateQuery -> {
+                    assertThat(updateQuery.getDocument())
+                            .containsOnlyKeys("embedding");
+                    assertThat(updateQuery.getRefreshPolicy())
+                            .isEqualTo(RefreshPolicy.NONE);
+                });
 
-        assertThat(updateQuery.getId())
-                .isEqualTo(firstContentId.toString());
-
-        assertThat(updateQuery.getDocument())
-                .containsOnlyKeys("embedding");
-
-        assertThat(updateQuery.getRefreshPolicy())
-                .isEqualTo(RefreshPolicy.NONE);
+        verify(contentEmbeddingService, times(3))
+                .embedContent(any(Content.class), anyList());
+        verify(contentRepository)
+                .findAllByIdInAndDeletedAtIsNull(anyList());
+        verify(searchHits).close();
+        verify(contentSearchRepository, never())
+                .save(any(ContentSearchDocument.class));
 
         verify(indexOperations)
                 .refresh();
+    }
 
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
+    @Test
+    void reindexAllProcessesMoreThanOneSearchBatchWithoutRepeatingHits() {
+        enableAi();
+
+        List<UUID> contentIds = java.util.stream.IntStream.range(0, 501)
+                .mapToObj(ignored -> UUID.randomUUID())
+                .toList();
+        assertThat(new java.util.HashSet<>(contentIds)).hasSize(501);
+        Map<UUID, Content> contentsById = new java.util.HashMap<>();
+        contentIds.forEach(contentId -> {
+            Content content = mock(Content.class);
+            when(content.getId()).thenReturn(contentId);
+            contentsById.put(contentId, content);
+        });
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                createSearchHitsIterator(contentIds);
+
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        List<List<UUID>> queriedBatches = new java.util.ArrayList<>();
+        when(contentRepository.findAllByIdInAndDeletedAtIsNull(anyList()))
+                .thenAnswer(invocation -> {
+                    List<UUID> batchIds = new java.util.ArrayList<>(
+                            invocation.getArgument(0)
+                    );
+                    queriedBatches.add(batchIds);
+                    return batchIds.stream()
+                            .map(contentsById::get)
+                            .toList();
+                });
+        when(contentTagRepository.findAllByContentIds(anyCollection()))
+                .thenReturn(List.of());
+        when(contentEmbeddingService.embedContent(
+                any(Content.class),
+                anyList()
+        )).thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        when(elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        )).thenReturn(indexOperations);
+
+        assertThat(contentEmbeddingIndexer.reindexAll())
+                .isEqualTo(501L);
+
+        verify(contentRepository, times(2))
+                .findAllByIdInAndDeletedAtIsNull(anyList());
+        assertThat(queriedBatches)
+                .extracting(List::size)
+                .containsExactly(500, 1);
+        assertThat(queriedBatches.stream()
+                .flatMap(List::stream)
+                .toList())
+                .containsExactlyElementsOf(contentIds);
+        verify(contentEmbeddingService, times(501))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(501))
+                .update(any(UpdateQuery.class), any());
+        verify(searchHits).close();
+    }
+
+    @Test
+    void reindexAllPropagatesStreamFailureAndClosesSearchHits() {
+        enableAi();
+
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                mock(SearchHitsIterator.class);
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        when(searchHits.hasNext())
+                .thenThrow(new RuntimeException("Elasticsearch unavailable"));
+        when(elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        )).thenReturn(indexOperations);
+
+        assertThatThrownBy(contentEmbeddingIndexer::reindexAll)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("완료하지 못했습니다.");
+
+        verify(searchHits).close();
+        verify(indexOperations).refresh();
+        verifyNoInteractions(contentRepository, contentTagRepository,
+                contentEmbeddingService);
     }
 
     private ContentEmbeddingIndexer createIndexer(
@@ -508,6 +559,29 @@ class ContentEmbeddingIndexerTest {
     private void enableAi() {
         when(aiProperties.apiKey())
                 .thenReturn("test-api-key");
+    }
+
+    private SearchHitsIterator<ContentSearchDocument> createSearchHitsIterator(
+            List<UUID> contentIds
+    ) {
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                mock(SearchHitsIterator.class);
+        List<SearchHit<ContentSearchDocument>> hits = contentIds.stream()
+                .map(contentId -> {
+                    SearchHit<ContentSearchDocument> hit =
+                            mock(SearchHit.class);
+                    when(hit.getId()).thenReturn(contentId.toString());
+                    return hit;
+                })
+                .toList();
+        AtomicInteger position = new AtomicInteger();
+
+        when(searchHits.hasNext())
+                .thenAnswer(invocation -> position.get() < hits.size());
+        when(searchHits.next())
+                .thenAnswer(invocation -> hits.get(position.getAndIncrement()));
+
+        return searchHits;
     }
 
     private void assertMissingEmbeddingIsNotUpdated(

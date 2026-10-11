@@ -7,20 +7,22 @@ import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Service;
 
@@ -88,90 +90,133 @@ public class ContentEmbeddingIndexer {
     }
 
     public long reindexAll() {
+        return backfillMissing().succeeded();
+    }
+
+    public BackfillResult backfillMissing() {
         if (!aiAvailability.isAvailable()) {
-            return 0L;
+            return new BackfillResult(0L, 0L, 0L);
         }
 
-        int pageNumber = 0;
-        long indexedCount = 0L;
-        Page<Content> contentPage;
+        BackfillCounts counts = new BackfillCounts();
+        List<UUID> contentIds = new ArrayList<>(BATCH_SIZE);
 
         try {
-            do {
-                Pageable pageable = PageRequest.of(
-                        pageNumber,
-                        BATCH_SIZE,
-                        Sort.by(Sort.Direction.ASC, "id")
-                );
+            try (SearchHitsIterator<ContentSearchDocument> searchHits =
+                         elasticsearchOperations.searchForStream(
+                                 buildMissingEmbeddingQuery(),
+                                 ContentSearchDocument.class
+                         )) {
+                while (searchHits.hasNext()) {
+                    SearchHit<ContentSearchDocument> searchHit =
+                            searchHits.next();
+                    contentIds.add(UUID.fromString(searchHit.getId()));
 
-                contentPage =
-                        contentRepository.findAllByDeletedAtIsNull(
-                                pageable
-                        );
-
-                List<Content> contents =
-                        contentPage.getContent();
-
-                Map<UUID, List<ContentTag>> tagsByContentId =
-                        findTagsByContentId(contents);
-
-                Map<UUID, ContentSearchDocument> documentsByContentId =
-                        findDocumentsByContentId(contents);
-
-                for (Content content : contents) {
-                    ContentSearchDocument document =
-                            documentsByContentId.get(
-                                    content.getId()
-                            );
-
-                    if (document == null) {
-                        log.warn(
-                                "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
-                                content.getId()
-                        );
-                        continue;
-                    }
-
-                    List<ContentTag> contentTags =
-                            tagsByContentId.getOrDefault(
-                                    content.getId(),
-                                    List.of()
-                            );
-
-                    if (embedAndUpdate(
-                            content,
-                            contentTags,
-                            RefreshPolicy.NONE
-                    )) {
-                        indexedCount++;
+                    if (contentIds.size() == BATCH_SIZE) {
+                        processBatch(contentIds, counts);
+                        contentIds.clear();
                     }
                 }
 
-                pageNumber++;
-            } while (contentPage.hasNext());
+                processBatch(contentIds, counts);
+            }
         } catch (RuntimeException exception) {
-            log.warn(
-                    "콘텐츠 embedding 전체 색인에 실패했습니다. indexedCount={}",
-                    indexedCount,
+            refreshAfterFailure(exception);
+            log.error(
+                    "콘텐츠 embedding Backfill 조회 또는 스트림 처리가 중단되었습니다. 성공={}, 실패={}, 건너뜀={}",
+                    counts.succeeded,
+                    counts.failed,
+                    counts.skipped,
+                    exception
+            );
+            throw new IllegalStateException(
+                    "콘텐츠 embedding Backfill을 완료하지 못했습니다.",
                     exception
             );
         }
 
+        elasticsearchOperations
+                .indexOps(ContentSearchDocument.class)
+                .refresh();
+
+        log.info(
+                "콘텐츠 누락 embedding Backfill 완료. 성공={}, 실패={}, 건너뜀={}",
+                counts.succeeded,
+                counts.failed,
+                counts.skipped
+        );
+
+        return new BackfillResult(
+                counts.succeeded,
+                counts.failed,
+                counts.skipped
+        );
+    }
+
+    private NativeQuery buildMissingEmbeddingQuery() {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
+                        .mustNot(mustNot -> mustNot.exists(exists -> exists
+                                .field("embedding")
+                        ))
+                ))
+                .withPageable(PageRequest.of(0, BATCH_SIZE))
+                .build();
+
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
+        ));
+
+        return query;
+    }
+
+    private void processBatch(
+            List<UUID> contentIds,
+            BackfillCounts counts
+    ) {
+        if (contentIds.isEmpty()) {
+            return;
+        }
+
+        List<Content> contents =
+                contentRepository.findAllByIdInAndDeletedAtIsNull(
+                        contentIds
+                );
+        Set<UUID> activeContentIds = contents.stream()
+                .map(Content::getId)
+                .collect(Collectors.toCollection(HashSet::new));
+        counts.skipped += contentIds.size() - activeContentIds.size();
+
+        Map<UUID, List<ContentTag>> tagsByContentId =
+                findTagsByContentId(contents);
+
+        for (Content content : contents) {
+            List<ContentTag> contentTags =
+                    tagsByContentId.getOrDefault(
+                            content.getId(),
+                            List.of()
+                    );
+
+            if (embedAndUpdate(
+                    content,
+                    contentTags,
+                    RefreshPolicy.NONE
+            )) {
+                counts.succeeded++;
+            } else {
+                counts.failed++;
+            }
+        }
+    }
+
+    private void refreshAfterFailure(RuntimeException failure) {
         try {
             elasticsearchOperations
-                    .indexOps(
-                            ContentSearchDocument.class
-                    )
+                    .indexOps(ContentSearchDocument.class)
                     .refresh();
-        } catch (RuntimeException exception) {
-            log.warn(
-                    "콘텐츠 embedding 전체 색인 후 Elasticsearch refresh에 실패했습니다. indexedCount={}",
-                    indexedCount,
-                    exception
-            );
+        } catch (RuntimeException refreshException) {
+            failure.addSuppressed(refreshException);
         }
-
-        return indexedCount;
     }
 
     private boolean embedAndUpdate(
@@ -254,34 +299,18 @@ public class ContentEmbeddingIndexer {
                         contentTag.getContent().getId()));
     }
 
-    private Map<UUID, ContentSearchDocument> findDocumentsByContentId(
-            List<Content> contents
+    private static class BackfillCounts {
+
+        private long succeeded;
+        private long failed;
+        private long skipped;
+    }
+
+    public record BackfillResult(
+            long succeeded,
+            long failed,
+            long skipped
     ) {
-        if (contents.isEmpty()) {
-            return Map.of();
-        }
-
-        List<String> documentIds = contents.stream()
-                .map(Content::getId)
-                .map(UUID::toString)
-                .toList();
-
-        Iterable<ContentSearchDocument> documents =
-                contentSearchRepository.findAllById(
-                        documentIds
-                );
-
-        return StreamSupport.stream(
-                        documents.spliterator(),
-                        false
-                )
-                .collect(Collectors.toMap(
-                        document ->
-                                UUID.fromString(
-                                        document.getId()
-                                ),
-                        Function.identity()
-                ));
     }
 
 }

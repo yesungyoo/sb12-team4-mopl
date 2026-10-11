@@ -3,6 +3,8 @@ package com.mopl.content.search;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -38,6 +41,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 
 @SpringBootTest(properties = {
         "spring.data.redis.host=localhost",
@@ -77,6 +81,9 @@ public class SemanticSearchIntegrationTest {
     private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @Autowired
+    private ElasticsearchOperations elasticsearchOperations;
+
+    @Autowired
     private SemanticSearchService semanticSearchService;
 
     @MockitoBean
@@ -94,6 +101,9 @@ public class SemanticSearchIntegrationTest {
     void setUp() {
         contentSearchRepository.deleteAll();
         contentRepository.deleteAllInBatch();
+        elasticsearchOperations
+                .indexOps(ContentSearchDocument.class)
+                .refresh();
     }
 
     @Test
@@ -227,6 +237,103 @@ public class SemanticSearchIntegrationTest {
         assertThat(contentSearchRepository.existsById(documentId))
                 .isFalse();
 
+        verifyNoInteractions(embeddingClient);
+    }
+
+    @Test
+    void backfillOnlyIndexesMissingEmbeddingsAcrossStreamingUpdates() {
+        Content existingEmbeddingContent = createContent(
+                "기존 Embedding 콘텐츠",
+                "이미 벡터가 있는 검색 문서"
+        );
+        List<Content> contents = new ArrayList<>();
+        contents.add(existingEmbeddingContent);
+        contents.addAll(IntStream.range(0, 501)
+                .mapToObj(index -> createContent(
+                        "누락 Embedding 콘텐츠 " + index,
+                        "Backfill 통합 테스트 콘텐츠"
+                ))
+                .toList());
+        Content softDeletedContent = createContent(
+                "Soft Delete 콘텐츠",
+                "Backfill에서 건너뛸 콘텐츠"
+        );
+        Content mysqlMissingContent = createContent(
+                "MySQL 누락 콘텐츠",
+                "Backfill에서 건너뛸 Elasticsearch 문서"
+        );
+        contents.add(softDeletedContent);
+        contents.add(mysqlMissingContent);
+
+        contentRepository.saveAll(contents);
+        contentRepository.flush();
+        contentSearchIndexer.reindexAll();
+
+        softDeletedContent.delete();
+        contentRepository.saveAndFlush(softDeletedContent);
+        contentRepository.deleteById(mysqlMissingContent.getId());
+        contentRepository.flush();
+
+        List<Double> existingEmbedding = IntStream.range(0, EMBEDDING_DIMENSIONS)
+                .mapToObj(ignored -> 0.25D)
+                .toList();
+        contentSearchRepository.save(ContentSearchDocument.from(
+                existingEmbeddingContent,
+                List.of(),
+                existingEmbedding
+        ));
+        elasticsearchOperations
+                .indexOps(ContentSearchDocument.class)
+                .refresh();
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(createVector(1)));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(501L);
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isEqualTo(2L);
+        verify(embeddingClient, times(501))
+                .embed(any(EmbeddingRequest.class));
+
+        ContentSearchDocument existingDocument = contentSearchRepository
+                .findById(existingEmbeddingContent.getId().toString())
+                .orElseThrow();
+        assertThat(existingDocument.getTitle())
+                .isEqualTo("기존 Embedding 콘텐츠");
+        assertThat(existingDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .allMatch(value -> value.equals(0.25F));
+
+        Content backfilledContent = contents.get(1);
+        ContentSearchDocument backfilledDocument = contentSearchRepository
+                .findById(backfilledContent.getId().toString())
+                .orElseThrow();
+        assertThat(backfilledDocument.getTitle())
+                .isEqualTo(backfilledContent.getTitle());
+        assertThat(backfilledDocument.getDescription())
+                .isEqualTo(backfilledContent.getDescription());
+        assertThat(backfilledDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS);
+
+        assertThat(contentSearchRepository
+                .findById(softDeletedContent.getId().toString())
+                .orElseThrow()
+                .getEmbedding()).isNull();
+        assertThat(contentSearchRepository
+                .findById(mysqlMissingContent.getId().toString())
+                .orElseThrow()
+                .getEmbedding()).isNull();
+
+        clearInvocations(embeddingClient);
+        ContentEmbeddingIndexer.BackfillResult secondResult =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(secondResult.succeeded()).isZero();
+        assertThat(secondResult.failed()).isZero();
+        assertThat(secondResult.skipped()).isEqualTo(2L);
         verifyNoInteractions(embeddingClient);
     }
 
