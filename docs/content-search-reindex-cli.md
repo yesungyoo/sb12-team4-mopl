@@ -9,10 +9,29 @@
 - 별도 Spring 프로필은 필요하지 않습니다. `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `ELASTICSEARCH_URL`을 환경에 맞게 설정하세요. CLI 초기화 코드가 이 값을 각각 datasource와 Elasticsearch 설정으로 변환합니다.
 - 재색인 CLI는 Flyway 마이그레이션을 실행하지 않습니다. 배포된 API 또는 별도 마이그레이션 절차로 DB 스키마를 먼저 최신 상태로 맞추세요. CLI의 Hibernate 스키마 동작은 `validate` 전용이며 테이블을 생성하거나 변경하지 않습니다.
 
+## 운영 실행 정책
+
+재색인 CLI는 운영자가 실행 시점을 명시적으로 결정하는 일회성 도구입니다.
+
+- 서비스 영향을 최소화하기 위해 트래픽이 적은 유지보수 구간에 실행하는 것을 권장합니다.
+- 동일한 Elasticsearch 인덱스를 대상으로 하는 `SYNC_DATA`와 `EMBEDDING_BACKFILL`을 동시에 실행하지 않습니다.
+- 콘텐츠 수집 Batch와 실행 시간이 겹치지 않도록 조정하고, Kafka Consumer의 검색 인덱스 갱신과 충돌하지 않도록 운영 구간을 관리합니다.
+- 실행 전 MySQL과 Elasticsearch의 연결 상태 및 DB 스키마를 확인합니다.
+- 실행 후 종료 코드와 로그를 확인하고 주요 콘텐츠의 검색 결과를 검증합니다.
+
+현재 CLI에는 중복 실행을 자동으로 차단하는 분산 락이 없으므로, 동시 실행 방지는 운영 절차로 관리합니다.
+
+- `SYNC_DATA` 중복 실행: 동일 데이터의 반복 동기화로 MySQL 및 Elasticsearch 부하가 증가할 수 있습니다.
+- `EMBEDDING_BACKFILL` 중복 실행: 동일 문서에 대해 OpenAI Embedding API가 중복 호출되어 불필요한 비용이 발생할 수 있습니다.
+
+따라서 동일 모드의 중복 실행과 서로 다른 재색인 모드의 동시 실행을 모두 금지합니다
+
 ## SYNC_DATA 실행
 
 MySQL 콘텐츠를 기존 검색 동기화 로직으로 Elasticsearch에 반영합니다. Embedding Backfill은 실행하지 않습니다.
 이 모드에는 `MOPL_AI_ENABLED`나 `OPENAI_API_KEY`가 필요하지 않습니다.
+
+Kafka 이벤트 유실로 검색 데이터 불일치가 발생한 경우에는 [콘텐츠 검색 Kafka 동기화 배포 및 운영 가이드](./content-search-kafka-deployment.md)의 복구 절차를 참고해 `SYNC_DATA`를 실행합니다.
 
 ```powershell
 .\gradlew.bat :reindex-cli:bootRun --args="--mopl.reindex.mode=SYNC_DATA"
@@ -161,6 +180,24 @@ printf 'CLI exit code: %d\n' "$cli_exit_code"
 ```bash
 exit "$cli_exit_code"
 ```
+
+## AI 최초 활성화 절차
+
+AI 검색 기능을 처음 활성화할 때는 일반 검색 데이터 동기화와 Embedding 생성을 분리하여 진행합니다.
+
+1. MySQL과 Elasticsearch의 연결 상태 및 DB 스키마를 확인합니다.
+2. 유지보수 구간을 확보하고 콘텐츠 수집 Batch 및 검색 동기화 작업과 실행 시간이 겹치지 않도록 조정합니다.
+3. `SYNC_DATA`를 실행하여 MySQL 콘텐츠를 Elasticsearch에 동기화합니다.
+4. 종료 코드 `0`을 확인하고 일반 콘텐츠 검색 결과를 검증합니다.
+5. `MOPL_AI_ENABLED=true`와 유효한 `OPENAI_API_KEY`를 준비합니다.
+6. `EMBEDDING_BACKFILL`을 실행하여 Embedding이 없는 문서를 처리합니다.
+7. 종료 코드와 성공·실패·건너뜀·미처리 건수를 확인합니다.
+8. 실패 또는 미처리가 있다면 원인을 해결하고 Backfill을 재실행합니다.
+9. Backfill 결과와 AI 검색 동작을 검증한 후 운영 API의 AI 기능을 활성화합니다.
+
+`SYNC_DATA`는 기존 Embedding을 보존하며, `EMBEDDING_BACKFILL`은 Embedding이 없는 문서만 처리합니다. 따라서 Backfill을 재실행할 때 이미 완료된 문서에 대한 Embedding 생성을 반복하지 않습니다.
+
+AI 검색 기능을 사용자에게 공개하는 시점은 Backfill 처리 결과와 검색 동작을 검증한 후 결정합니다.
 
 ## Backfill 재실행과 처리 특성
 
