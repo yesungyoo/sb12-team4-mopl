@@ -77,14 +77,30 @@ Offset을 유지한다. 컨테이너가 중지 요청을 관리하므로 Consume
 문자열 대신 이번 요청의 식별자를 결과에 연결하여, 대소문자를 구분하지 않는
 collation에서도 기존 UUID를 정확히 재사용한다.
 
-
 ## Batch 실행 방법
 
-콘텐츠 수집 Batch는 API 서버와 분리하여 실행합니다.
+콘텐츠 수집 Batch는 API 서버와 분리하여 실행한다. `contentCollectionJob`은 TMDB Step과 SportsDB Step을 순서대로 실행한다.
 
-실행 전 MySQL 및 Kafka 연결 설정을 확인하고, 콘텐츠 수집 Job을 실행합니다.
+실행 전 MySQL, Kafka 연결 설정과 외부 API 인증 정보를 확인한다.
 
-구체적인 실행 명령과 Job 파라미터는 실제 Batch Job 구성을 확인한 후 기재합니다.
+- DB 접속 환경변수: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`
+- Kafka 접속 설정: `spring.kafka.bootstrap-servers`
+- 외부 API 인증 정보: `TMDB_ACCESS_TOKEN`, `SPORTSDB_API_KEY`
+- 필수 Job Parameter: `collectionDate` (`yyyy-MM-dd` 형식)
+
+로컬 실행 예시:
+
+```bash
+./gradlew :batch:bootRun --args='--spring.profiles.active=local collectionDate=2026-10-11'
+```
+
+`collectionDate`는 필수 Job Parameter이며 `yyyy-MM-dd` 형식이 아니면 Validator에서 실행을 거부한다.
+
+현재 Batch에는 실행 대상 Job이 `contentCollectionJob` 하나이므로 Spring Boot가 자동으로 실행한다.
+
+Batch는 `web-application-type: none`으로 구성되어 Job 완료 후 프로세스가 종료된다. `JobExecutionExitCodeGenerator`를 통해 실행 결과에 따른 종료 코드가 반환되므로 로그와 종료 코드를 함께 확인한다.
+
+실제 실행 전에 환경변수와 외부 API 인증 정보를 설정해야 하며, 위 실행 명령은 로컬 환경에서 동작을 확인할 필요가 있다.
 
 ## Kafka 이벤트 유실 시 복구
 

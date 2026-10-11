@@ -24,7 +24,7 @@
 - `SYNC_DATA` 중복 실행: 동일 데이터의 반복 동기화로 MySQL 및 Elasticsearch 부하가 증가할 수 있습니다.
 - `EMBEDDING_BACKFILL` 중복 실행: 동일 문서에 대해 OpenAI Embedding API가 중복 호출되어 불필요한 비용이 발생할 수 있습니다.
 
-따라서 동일 모드의 중복 실행과 서로 다른 재색인 모드의 동시 실행을 모두 금지합니다
+따라서 동일 모드의 중복 실행과 서로 다른 재색인 모드의 동시 실행을 모두 금지합니다.
 
 ## SYNC_DATA 실행
 
@@ -192,8 +192,10 @@ AI 검색 기능을 처음 활성화할 때는 일반 검색 데이터 동기화
 5. `MOPL_AI_ENABLED=true`와 유효한 `OPENAI_API_KEY`를 준비합니다.
 6. `EMBEDDING_BACKFILL`을 실행하여 Embedding이 없는 문서를 처리합니다.
 7. 종료 코드와 성공·실패·건너뜀·미처리 건수를 확인합니다.
-8. 실패 또는 미처리가 있다면 원인을 해결하고 Backfill을 재실행합니다.
+8. 실패 또는 미처리가 있다면 원인을 해결하고 `EMBEDDING_BACKFILL`을 재실행합니다.
 9. Backfill 결과와 AI 검색 동작을 검증한 후 운영 API의 AI 기능을 활성화합니다.
+10. AI 활성화 전후에 새로 색인된 콘텐츠의 누락 Embedding을 보완하기 위해 `EMBEDDING_BACKFILL`을 한 번 더 실행합니다.
+11. 최종 종료 코드와 성공·실패·미처리 건수를 확인하고 AI 검색 동작을 재검증합니다.
 
 `SYNC_DATA`는 기존 Embedding을 보존하며, `EMBEDDING_BACKFILL`은 Embedding이 없는 문서만 처리합니다. 따라서 Backfill을 재실행할 때 이미 완료된 문서에 대한 Embedding 생성을 반복하지 않습니다.
 
