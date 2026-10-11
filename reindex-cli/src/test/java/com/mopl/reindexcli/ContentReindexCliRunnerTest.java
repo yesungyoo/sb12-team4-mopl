@@ -1,6 +1,7 @@
 package com.mopl.reindexcli;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +38,21 @@ class ContentReindexCliRunnerTest {
 
         assertThat(runner.getExitCode()).isZero();
         verify(contentSearchIndexer).reindexAll();
+        verify(contentEmbeddingIndexer, never()).backfillMissing();
+        verify(contentEmbeddingIndexer, never()).validateBackfillConfiguration();
+    }
+
+    @Test
+    void embeddingBackfillRejectsInvalidThresholdBeforeAiPreflightOrProcessing() {
+        doThrow(new ContentEmbeddingIndexer.BackfillConfigurationException(
+                "잘못된 Backfill 전용 임계치"
+        )).when(contentEmbeddingIndexer).validateBackfillConfiguration();
+        ContentReindexCliRunner runner = createRunner();
+
+        runner.run(arguments("EMBEDDING_BACKFILL"));
+
+        assertThat(runner.getExitCode()).isEqualTo(2);
+        verify(aiAvailability, never()).isAvailable();
         verify(contentEmbeddingIndexer, never()).backfillMissing();
     }
 

@@ -16,6 +16,7 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration;
+import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.elasticsearch.repository.config.EnableElasticsearchRepositories;
@@ -24,7 +25,10 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 /** 재색인에 필요한 Bean만 등록해 API 부수 기능을 띄우지 않는 CLI Context입니다. */
 @SpringBootConfiguration
 @EnableAutoConfiguration(
-        exclude = KafkaAutoConfiguration.class,
+        exclude = {
+                KafkaAutoConfiguration.class,
+                TaskSchedulingAutoConfiguration.class
+        },
         excludeName = "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration"
 )
 @EntityScan("com.mopl.core.domain")
@@ -74,16 +78,16 @@ public class ContentReindexCliApplication {
                 ContentReindexCliApplication.class
         );
         application.setWebApplicationType(WebApplicationType.NONE);
+        application.addInitializers(new ReindexCliEnvironmentInitializer());
         return application;
     }
 
     static int startupFailureExitCode(Throwable failure) {
         Throwable current = failure;
         while (current != null) {
-            String message = current.getMessage();
-            if (message != null
-                    && message.contains("embedding-backfill.")
-                    && message.contains("설정은 양수여야")) {
+            if (current instanceof ReindexCliConfigurationException
+                    || current instanceof ContentEmbeddingIndexer
+                            .BackfillConfigurationException) {
                 return 2;
             }
             current = current.getCause();

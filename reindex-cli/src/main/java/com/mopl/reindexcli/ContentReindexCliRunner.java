@@ -30,6 +30,16 @@ public class ContentReindexCliRunner implements ApplicationRunner, ExitCodeGener
             return;
         }
 
+        if (mode == ReindexMode.EMBEDDING_BACKFILL) {
+            try {
+                contentEmbeddingIndexer.validateBackfillConfiguration();
+            } catch (ContentEmbeddingIndexer.BackfillConfigurationException exception) {
+                log.error("Embedding Backfill 설정 오류: {}", exception.getMessage());
+                exitCode = 2;
+                return;
+            }
+        }
+
         if (mode == ReindexMode.EMBEDDING_BACKFILL
                 && !aiAvailability.isAvailable()) {
             log.error(
