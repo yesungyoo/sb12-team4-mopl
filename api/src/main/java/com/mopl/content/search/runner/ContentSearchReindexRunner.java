@@ -28,10 +28,27 @@ public class ContentSearchReindexRunner implements ApplicationRunner {
 
         log.info("Elasticsearch 콘텐츠 전체 재색인 완료. indexedCount={}", indexedCount);
 
-        long embeddingIndexedCount =
-                contentEmbeddingIndexer.reindexAll();
+        ContentEmbeddingIndexer.BackfillResult backfillResult =
+                contentEmbeddingIndexer.backfillMissing();
 
-        log.info("Elasticsearch 콘텐츠 embedding 전체 색인 완료. indexedCount={}",
-                embeddingIndexedCount);
+        if (backfillResult.stoppedEarly()) {
+            log.warn(
+                    "Elasticsearch 콘텐츠 Embedding Backfill 조기 중단. 이유={}, 성공={}, 실패={}, 건너뜀={}, 미처리={}",
+                    backfillResult.stopReason(),
+                    backfillResult.succeeded(),
+                    backfillResult.failed(),
+                    backfillResult.skipped(),
+                    backfillResult.unprocessed()
+            );
+            return;
+        }
+
+        log.info(
+                "Elasticsearch 콘텐츠 embedding Backfill 완료. 성공={}, 실패={}, 건너뜀={}, 미처리={}",
+                backfillResult.succeeded(),
+                backfillResult.failed(),
+                backfillResult.skipped(),
+                backfillResult.unprocessed()
+        );
     }
 }
