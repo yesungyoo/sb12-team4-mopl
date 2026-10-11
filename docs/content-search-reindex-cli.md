@@ -76,6 +76,7 @@ exit $cliExitCode
 ## Linux/macOS Bash 실행
 
 저장소 루트에서 접속 환경 변수를 현재 Bash 프로세스에 설정합니다. 비밀번호와 API Key 같은 비밀값을 명령줄에 직접 작성하면 셸 기록에 남을 수 있으므로, 아래처럼 입력을 숨겨 받거나 조직의 비밀 저장소에서 주입하세요. `.env` 파일은 자동으로 로드되지 않습니다.
+macOS 기본 셸인 zsh에서는 일부 Bash 전용 명령어(shopt, read -rsp 등)가 동작하지 않습니다. macOS 사용자는 터미널에서 bash를 먼저 실행해 Bash 셸로 전환한 뒤 아래 명령어를 실행하세요.
 
 ```bash
 export DB_HOST='127.0.0.1'
@@ -99,13 +100,14 @@ for jar in reindex-cli/build/libs/reindex-cli-*.jar; do
     [[ "$jar" == *-plain.jar ]] || jar_candidates+=("$jar")
 done
 
-if (( ${#jar_candidates[@]} != 1 )); then
+if (( ${#jar_candidates[@]} == 1 )); then
+    cli_jar=${jar_candidates[0]}
+    printf '실행할 JAR: %s\n' "$cli_jar"
+else
+    unset cli_jar
     printf '실행 가능한 reindex-cli JAR 후보가 %d개입니다. 이번 bootJar 출력 JAR 하나만 지정하세요.\n' \
         "${#jar_candidates[@]}" >&2
-    exit 1
 fi
-
-cli_jar=${jar_candidates[0]}
 ```
 
 ### SYNC_DATA
@@ -113,7 +115,10 @@ cli_jar=${jar_candidates[0]}
 `SYNC_DATA`에는 AI 활성화나 OpenAI API Key가 필요하지 않습니다.
 
 ```bash
-if java -jar "$cli_jar" --mopl.reindex.mode=SYNC_DATA; then
+if [[ -z ${cli_jar:-} ]]; then
+    printf '실행 가능한 JAR가 없어 SYNC_DATA를 시작하지 않습니다.\n' >&2
+    cli_exit_code=1
+elif java -jar "$cli_jar" --mopl.reindex.mode=SYNC_DATA; then
     cli_exit_code=0
 else
     cli_exit_code=$?
@@ -133,7 +138,10 @@ printf '\n'
 export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
 export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
 
-if java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
+if [[ -z ${cli_jar:-} ]]; then
+    printf '실행 가능한 JAR가 없어 EMBEDDING_BACKFILL을 시작하지 않습니다.\n' >&2
+    cli_exit_code=1
+elif java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
     cli_exit_code=0
 else
     cli_exit_code=$?
