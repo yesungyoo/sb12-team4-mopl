@@ -84,7 +84,7 @@ collation에서도 기존 UUID를 정확히 재사용한다.
 실행 전 MySQL, Kafka 연결 설정과 외부 API 인증 정보를 확인한다.
 
 - DB 접속 환경변수: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`
-- Kafka 접속 설정: `spring.kafka.bootstrap-servers`
+- Kafka 접속 환경변수: `KAFKA_BOOTSTRAP_SERVERS` (로컬 기본값: `localhost:9092`)
 - 외부 API 인증 정보: `TMDB_ACCESS_TOKEN`, `SPORTSDB_API_KEY`
 - 필수 Job Parameter: `collectionDate` (`yyyy-MM-dd` 형식)
 
@@ -104,16 +104,16 @@ Batch는 `web-application-type: none`으로 구성되어 Job 완료 후 프로�
 
 ## Kafka 이벤트 유실 시 복구
 
-현재 구조에는 Transactional Outbox가 없어 DB 커밋 후 Kafka 이벤트 발행에 실패하면 Elasticsearch 검색 데이터가 MySQL과 달라질 수 있습니다.
+현재 구조에는 Transactional Outbox가 없어 DB 커밋 후 Kafka 이벤트 발행에 실패하면 Elasticsearch 검색 데이터가 MySQL과 달라질 수 있다.
 
-이벤트 유실이 의심되는 경우 다음 순서로 복구합니다.
+이벤트 유실이 의심되는 경우 다음 순서로 복구한다.
 
-1. Kafka 및 Elasticsearch 장애 원인을 확인하고 복구합니다.
-2. Batch 콘텐츠 수집 작업과 검색 동기화 작업이 실행 중인지 확인합니다.
-3. 운영 영향이 적은 유지보수 구간을 확보합니다.
-4. `reindex-cli`의 `SYNC_DATA` 모드를 실행하여 MySQL 기준으로 Elasticsearch를 다시 동기화합니다.
-5. 종료 코드가 `0`인지 확인하고 주요 콘텐츠의 검색 결과를 검증합니다.
+1. Kafka 및 Elasticsearch 장애 원인을 확인하고 복구한다.
+2. Batch 콘텐츠 수집 작업과 검색 동기화 작업의 실행 상태를 확인한다.
+3. 운영 영향이 적은 유지보수 구간을 확보한다.
+4. `reindex-cli`의 `SYNC_DATA` 모드를 실행하여 MySQL 기준으로 Elasticsearch를 다시 동기화한다.
+5. 종료 코드 `0`을 확인하고 주요 콘텐츠의 검색 결과를 검증한다.
 
-`SYNC_DATA`는 기존 Embedding을 보존하며, 동기화 과정에서 발생한 예외는 종료 코드 `3`으로 반환됩니다.
+`SYNC_DATA`는 기존 Embedding을 보존하며, 동기화 과정에서 발생한 예외는 종료 코드 `3`으로 반환된다.
 
-자세한 실행 방법과 종료 코드별 대응은 [검색 데이터 재색인 CLI 운영 안내](./content-search-reindex-cli.md)를 참고하세요.
+자세한 실행 방법과 종료 코드별 대응은 [검색 데이터 재색인 CLI 운영 안내](./content-search-reindex-cli.md)를 참고한다.
