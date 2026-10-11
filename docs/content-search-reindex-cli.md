@@ -131,22 +131,27 @@ printf 'CLI exit code: %d\n' "$cli_exit_code"
 Backfill에는 `MOPL_AI_ENABLED=true`와 OpenAI API Key가 모두 필요합니다. Key를 문서, 명령줄 또는 셸 기록에 직접 입력하지 말고 비밀 저장소에서 주입하거나 아래처럼 기록에 남지 않는 숨김 입력을 사용하세요.
 
 ```bash
-export MOPL_AI_ENABLED='true'
-read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY
-export OPENAI_API_KEY
-printf '\n'
-export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
-export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
-
 if [[ -z ${cli_jar:-} ]]; then
     printf '실행 가능한 JAR가 없어 EMBEDDING_BACKFILL을 시작하지 않습니다.\n' >&2
     cli_exit_code=1
-elif java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
-    cli_exit_code=0
 else
-    cli_exit_code=$?
+    export MOPL_AI_ENABLED='true'
+    read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY
+    export OPENAI_API_KEY
+    printf '\n'
+
+    export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
+    export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
+
+    if java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
+        cli_exit_code=0
+    else
+        cli_exit_code=$?
+    fi
+
+    unset OPENAI_API_KEY
 fi
-unset OPENAI_API_KEY
+
 printf 'CLI exit code: %d\n' "$cli_exit_code"
 ```
 
