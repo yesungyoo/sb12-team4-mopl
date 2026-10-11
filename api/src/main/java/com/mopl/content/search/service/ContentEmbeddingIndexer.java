@@ -46,6 +46,9 @@ public class ContentEmbeddingIndexer {
     @Value("${mopl.elasticsearch.embedding-backfill.max-consecutive-failures:5}")
     private int maxConsecutiveFailures = 5;
 
+    @Value("${mopl.elasticsearch.embedding-backfill.max-consecutive-es-failures:5}")
+    private int maxConsecutiveElasticsearchFailures = 5;
+
     public ContentEmbeddingIndexer(
             ContentRepository contentRepository,
             ContentTagRepository contentTagRepository,
@@ -104,6 +107,11 @@ public class ContentEmbeddingIndexer {
         if (maxConsecutiveFailures <= 0) {
             throw new IllegalStateException(
                     "mopl.elasticsearch.embedding-backfill.max-consecutive-failures 설정은 양수여야 합니다."
+            );
+        }
+        if (maxConsecutiveElasticsearchFailures <= 0) {
+            throw new IllegalStateException(
+                    "mopl.elasticsearch.embedding-backfill.max-consecutive-es-failures 설정은 양수여야 합니다."
             );
         }
     }
@@ -304,6 +312,7 @@ public class ContentEmbeddingIndexer {
             if (result == EmbeddingUpdateResult.SUCCEEDED) {
                 counts.succeeded++;
                 counts.consecutiveFailures = 0;
+                counts.consecutiveElasticsearchFailures = 0;
             } else if (result == EmbeddingUpdateResult.EMBEDDING_FAILED) {
                 counts.failed++;
                 counts.consecutiveFailures++;
@@ -323,6 +332,21 @@ public class ContentEmbeddingIndexer {
                 counts.failed++;
                 // Embedding API는 성공했으므로 ES 저장 오류는 연속 API 실패 횟수에 포함하지 않습니다.
                 counts.consecutiveFailures = 0;
+                counts.consecutiveElasticsearchFailures++;
+                if (counts.consecutiveElasticsearchFailures
+                        >= maxConsecutiveElasticsearchFailures) {
+                    counts.stopReason = BackfillStopReason
+                            .CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT;
+                    log.error(
+                            "콘텐츠 Embedding Backfill 조기 중단. 이유=Elasticsearch 연속 저장 실패 임계치 도달, 임계치={}, 성공={}, 실패={}, 건너뜀={}, 미처리={}",
+                            maxConsecutiveElasticsearchFailures,
+                            counts.succeeded,
+                            counts.failed,
+                            counts.skipped,
+                            counts.totalTargets - counts.processedTargets
+                    );
+                    return true;
+                }
             }
         }
 
@@ -438,6 +462,7 @@ public class ContentEmbeddingIndexer {
         private long totalTargets;
         private long processedTargets;
         private int consecutiveFailures;
+        private int consecutiveElasticsearchFailures;
         private BackfillStopReason stopReason = BackfillStopReason.NONE;
     }
 
@@ -450,7 +475,8 @@ public class ContentEmbeddingIndexer {
     public enum BackfillStopReason {
         NONE,
         AUTHENTICATION_ERROR,
-        CONSECUTIVE_FAILURE_LIMIT
+        CONSECUTIVE_FAILURE_LIMIT,
+        CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT
     }
 
     public record BackfillResult(

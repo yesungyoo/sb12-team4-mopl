@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -628,6 +629,11 @@ class ContentEmbeddingIndexerTest {
                 "maxConsecutiveFailures",
                 2
         );
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                7
+        );
         BackfillFixture fixture = createBackfillFixture(6);
         when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
                 .thenReturn(List.of(0.1D));
@@ -648,6 +654,108 @@ class ContentEmbeddingIndexerTest {
         verify(contentEmbeddingService, times(6))
                 .embedContent(any(Content.class), anyList());
         verify(elasticsearchOperations, times(6))
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingStopsAfterFiveConsecutiveElasticsearchUpdateFailures() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(7);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        doThrow(new RuntimeException("Elasticsearch update unavailable"))
+                .when(elasticsearchOperations)
+                .update(any(UpdateQuery.class), any());
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(5L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(5))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(5))
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingResetsElasticsearchFailureCountAfterSuccessfulSave() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                3
+        );
+        BackfillFixture fixture = createBackfillFixture(6);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        AtomicInteger updateCalls = new AtomicInteger();
+        doAnswer(invocation -> {
+            int call = updateCalls.incrementAndGet();
+            if (call != 3 && call != 6) {
+                throw new RuntimeException("Elasticsearch update unavailable");
+            }
+            return null;
+        }).when(elasticsearchOperations)
+                .update(any(UpdateQuery.class), any());
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(2L);
+        assertThat(result.failed()).isEqualTo(4L);
+        assertThat(result.unprocessed()).isZero();
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason.NONE);
+        verify(contentEmbeddingService, times(6))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(6))
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingUsesConfiguredElasticsearchFailureThreshold() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(4);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        doThrow(new RuntimeException("Elasticsearch update unavailable"))
+                .when(elasticsearchOperations)
+                .update(any(UpdateQuery.class), any());
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.failed()).isEqualTo(2L);
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(2))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(2))
                 .update(any(UpdateQuery.class), any());
         verify(fixture.searchHits()).close();
     }
@@ -704,6 +812,23 @@ class ContentEmbeddingIndexerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
                         "mopl.elasticsearch.embedding-backfill.max-consecutive-failures"
+                )
+                .hasMessageContaining("양수");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void rejectsNonPositiveElasticsearchFailureThreshold(int threshold) {
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                threshold
+        );
+
+        assertThatThrownBy(contentEmbeddingIndexer::validateBackfillConfiguration)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "mopl.elasticsearch.embedding-backfill.max-consecutive-es-failures"
                 )
                 .hasMessageContaining("양수");
     }
