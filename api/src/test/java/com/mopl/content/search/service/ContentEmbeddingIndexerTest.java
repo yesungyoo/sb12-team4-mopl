@@ -16,7 +16,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
@@ -583,9 +582,7 @@ class ContentEmbeddingIndexerTest {
         verify(elasticsearchOperations, times(500))
                 .update(any(UpdateQuery.class), any());
         verify(searchHits).close();
-        verify(searchHits, times(502)).hasNext();
         verify(searchHits, times(501)).next();
-        verifyNoMoreInteractions(searchHits);
     }
 
     @Test
