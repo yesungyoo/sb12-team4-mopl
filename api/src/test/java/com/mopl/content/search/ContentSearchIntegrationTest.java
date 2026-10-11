@@ -2,6 +2,7 @@ package com.mopl.content.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.dto.ContentListItemResponse;
@@ -32,6 +33,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHitsIterator;
+import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -142,6 +147,174 @@ class ContentSearchIntegrationTest {
                         )
                 )
         );
+    }
+
+    @Test
+    void syncDataPreservesEmbeddingAndBulkUpsertsNewContent() {
+        Content existingContent = createContent(
+                ContentType.MOVIE,
+                "동기화 전 제목",
+                "기존 설명",
+                LocalDate.of(2025, 1, 1),
+                new BigDecimal("100.0"),
+                new BigDecimal("7.0")
+        );
+        contentRepository.saveAndFlush(existingContent);
+
+        List<Double> existingEmbedding = Collections.nCopies(
+                EMBEDDING_DIMENSIONS,
+                0.25D
+        );
+        contentSearchRepository.save(
+                ContentSearchDocument.from(
+                        existingContent,
+                        List.of(),
+                        existingEmbedding
+                )
+        );
+        refreshSearchIndex();
+
+        existingContent.update(
+                ContentType.MOVIE,
+                "동기화 후 제목",
+                "최신 설명",
+                null,
+                LocalDate.of(2026, 1, 1)
+        );
+        contentRepository.saveAndFlush(existingContent);
+
+        Content newContent = createContent(
+                ContentType.TV_SERIES,
+                "신규 콘텐츠",
+                "신규 설명",
+                LocalDate.of(2026, 2, 1),
+                new BigDecimal("200.0"),
+                new BigDecimal("8.0")
+        );
+        contentRepository.saveAndFlush(newContent);
+
+        long indexedCount = contentSearchIndexer.reindexAll();
+
+        ContentSearchDocument updatedDocument = contentSearchRepository
+                .findById(existingContent.getId().toString())
+                .orElseThrow();
+        ContentSearchDocument newDocument = contentSearchRepository
+                .findById(newContent.getId().toString())
+                .orElseThrow();
+
+        assertThat(indexedCount).isEqualTo(2L);
+        assertThat(updatedDocument.getTitle())
+                .isEqualTo("동기화 후 제목");
+        assertThat(updatedDocument.getDescription())
+                .isEqualTo("최신 설명");
+        assertThat(updatedDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .allMatch(value -> value.equals(0.25F));
+        assertThat(newDocument.getTitle())
+                .isEqualTo("신규 콘텐츠");
+        assertThat(newDocument.getEmbedding()).isNull();
+        verifyNoInteractions(embeddingClient);
+    }
+
+    @Test
+    void idOnlySourceFilterExcludesEmbedding() {
+        Content content = createContent(
+                ContentType.MOVIE,
+                "Source Filter 콘텐츠",
+                "Embedding Source Filter 검증",
+                LocalDate.of(2025, 1, 1),
+                new BigDecimal("100.0"),
+                new BigDecimal("7.0")
+        );
+        contentRepository.saveAndFlush(content);
+
+        List<Double> embedding = Collections.nCopies(
+                EMBEDDING_DIMENSIONS,
+                0.25D
+        );
+        contentSearchRepository.save(ContentSearchDocument.from(
+                content,
+                List.of(),
+                embedding
+        ));
+        refreshSearchIndex();
+
+        ContentSearchDocument storedDocument = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        assertThat(storedDocument.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .allMatch(value -> value.equals(0.25F));
+
+        Query idOnlyQuery = Query.findAll();
+        idOnlyQuery.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
+        ));
+        try (SearchHitsIterator<ContentSearchDocument> hits =
+                     elasticsearchOperations.searchForStream(
+                             idOnlyQuery,
+                             ContentSearchDocument.class
+                     )) {
+            assertThat(hits.hasNext()).isTrue();
+            SearchHit<ContentSearchDocument> hit = hits.next();
+            assertThat(hit.getId()).isEqualTo(content.getId().toString());
+            assertThat(hit.getContent().getEmbedding()).isNull();
+        }
+    }
+
+    @Test
+    void syncDataDeletesElasticsearchOnlyAndSoftDeletedDocuments() {
+        Content activeContent = createContent(
+                ContentType.MOVIE,
+                "활성 콘텐츠",
+                "활성 설명",
+                LocalDate.of(2026, 1, 1),
+                new BigDecimal("300.0"),
+                new BigDecimal("8.0")
+        );
+        Content softDeletedContent = createContent(
+                ContentType.MOVIE,
+                "Soft Delete 콘텐츠",
+                "삭제 설명",
+                LocalDate.of(2026, 1, 2),
+                new BigDecimal("200.0"),
+                new BigDecimal("7.0")
+        );
+        Content elasticsearchOnlyContent = createContent(
+                ContentType.MOVIE,
+                "Elasticsearch 전용 콘텐츠",
+                "DB 삭제 설명",
+                LocalDate.of(2026, 1, 3),
+                new BigDecimal("100.0"),
+                new BigDecimal("6.0")
+        );
+
+        contentRepository.saveAllAndFlush(List.of(
+                activeContent,
+                softDeletedContent,
+                elasticsearchOnlyContent
+        ));
+        contentSearchIndexer.reindexAll();
+
+        UUID elasticsearchOnlyContentId =
+                elasticsearchOnlyContent.getId();
+        softDeletedContent.delete();
+        contentRepository.saveAndFlush(softDeletedContent);
+        contentRepository.deleteById(elasticsearchOnlyContentId);
+        contentRepository.flush();
+
+        long indexedCount = contentSearchIndexer.reindexAll();
+
+        assertThat(indexedCount).isEqualTo(1L);
+        assertThat(contentSearchRepository.existsById(
+                activeContent.getId().toString()
+        )).isTrue();
+        assertThat(contentSearchRepository.existsById(
+                softDeletedContent.getId().toString()
+        )).isFalse();
+        assertThat(contentSearchRepository.existsById(
+                elasticsearchOnlyContentId.toString()
+        )).isFalse();
     }
 
     @Test
