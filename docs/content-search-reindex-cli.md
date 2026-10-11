@@ -73,6 +73,81 @@ Embedding 모드는 같은 JAR 명령에서 모드만 바꾸고 `MOPL_AI_ENABLED
 exit $cliExitCode
 ```
 
+## Linux/macOS Bash 실행
+
+저장소 루트에서 접속 환경 변수를 현재 Bash 프로세스에 설정합니다. 비밀번호와 API Key 같은 비밀값을 명령줄에 직접 작성하면 셸 기록에 남을 수 있으므로, 아래처럼 입력을 숨겨 받거나 조직의 비밀 저장소에서 주입하세요. `.env` 파일은 자동으로 로드되지 않습니다.
+
+```bash
+export DB_HOST='127.0.0.1'
+export DB_PORT='3306'
+export DB_NAME='mopl'
+export DB_USERNAME='mopl'
+read -rsp 'DB_PASSWORD: ' DB_PASSWORD
+export DB_PASSWORD
+printf '\n'
+export ELASTICSEARCH_URL='http://127.0.0.1:9200'
+```
+
+실행 가능한 JAR를 빌드한 뒤 버전 문자열을 고정하지 않고 후보를 찾습니다. `*-plain.jar`는 실행 대상에서 제외하며, 이전 빌드 산출물까지 남아 후보가 둘 이상이면 임의로 선택하지 않고 중단합니다.
+
+```bash
+./gradlew :reindex-cli:bootJar
+
+shopt -s nullglob
+jar_candidates=()
+for jar in reindex-cli/build/libs/reindex-cli-*.jar; do
+    [[ "$jar" == *-plain.jar ]] || jar_candidates+=("$jar")
+done
+
+if (( ${#jar_candidates[@]} != 1 )); then
+    printf '실행 가능한 reindex-cli JAR 후보가 %d개입니다. 이번 bootJar 출력 JAR 하나만 지정하세요.\n' \
+        "${#jar_candidates[@]}" >&2
+    exit 1
+fi
+
+cli_jar=${jar_candidates[0]}
+```
+
+### SYNC_DATA
+
+`SYNC_DATA`에는 AI 활성화나 OpenAI API Key가 필요하지 않습니다.
+
+```bash
+if java -jar "$cli_jar" --mopl.reindex.mode=SYNC_DATA; then
+    cli_exit_code=0
+else
+    cli_exit_code=$?
+fi
+printf 'CLI exit code: %d\n' "$cli_exit_code"
+```
+
+### EMBEDDING_BACKFILL
+
+Backfill에는 `MOPL_AI_ENABLED=true`와 OpenAI API Key가 모두 필요합니다. Key를 문서, 명령줄 또는 셸 기록에 직접 입력하지 말고 비밀 저장소에서 주입하거나 아래처럼 기록에 남지 않는 숨김 입력을 사용하세요.
+
+```bash
+export MOPL_AI_ENABLED='true'
+read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY
+export OPENAI_API_KEY
+printf '\n'
+export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES='5'
+export MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES='5'
+
+if java -jar "$cli_jar" --mopl.reindex.mode=EMBEDDING_BACKFILL; then
+    cli_exit_code=0
+else
+    cli_exit_code=$?
+fi
+unset OPENAI_API_KEY
+printf 'CLI exit code: %d\n' "$cli_exit_code"
+```
+
+`if`에서 `java -jar`를 실행하면 호출 스크립트가 `set -e`를 사용해도 CLI의 `1`, `2`, `3`을 캡처한 뒤 대응할 수 있습니다. 종료 코드는 다른 외부 명령을 실행하기 전에 `$?`에서 `cli_exit_code`로 보관합니다. 호출 스크립트가 CLI와 같은 코드로 종료해야 한다면 마지막에 다음을 실행하세요. 대화형 셸에서 실행하면 현재 셸이 종료됩니다.
+
+```bash
+exit "$cli_exit_code"
+```
+
 ## Backfill 재실행과 처리 특성
 
 - Backfill은 Elasticsearch에서 `embedding`이 없는 문서만 찾습니다. 이미 Embedding이 저장된 문서는 다음 실행에서 조회 대상이 아니므로 OpenAI를 다시 호출하지 않습니다.

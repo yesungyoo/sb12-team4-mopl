@@ -100,6 +100,7 @@ curl http://localhost:8080/actuator/health
 
 ## 트러블슈팅
 
+- [검색 데이터 재색인 CLI 실행 및 장애 대응 가이드](docs/content-search-reindex-cli.md)
 - **`./gradlew` 실행 시 `permission denied`**: `chmod +x gradlew` 실행 후 재시도
 - **`Access denied for user 'mopl'@'...' (using password: NO)`**: `.env`를 만들기 전에 환경변수를 등록했거나, `.env` 수정 후 다시 등록을 안 한 경우입니다. **`.env` 생성 → 환경변수 등록 → 앱 실행** 순서를 반드시 지켜주세요.
 - **MySQL 접속 시 비밀번호 오류(컨테이너 자체)**:
