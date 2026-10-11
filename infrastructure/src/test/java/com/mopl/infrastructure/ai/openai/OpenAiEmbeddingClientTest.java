@@ -7,9 +7,14 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
+import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
@@ -20,9 +25,6 @@ import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import com.mopl.infrastructure.ai.exception.AiClientException;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-
-
-import java.time.Duration;
 
 class OpenAiEmbeddingClientTest {
 
@@ -160,6 +162,25 @@ class OpenAiEmbeddingClientTest {
         assertThatThrownBy(() -> openAiEmbeddingClient.embed(request))
                 .isInstanceOf(AiClientException.class)
                 .hasMessage("OpenAI Embedding 호출에 실패했습니다.");
+
+        mockServer.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403})
+    void embedPreservesAuthenticationStatusCode(int statusCode) {
+        mockServer.expect(
+                        requestTo("https://api.openai.com/v1/embeddings")
+                )
+                .andExpect(method(POST))
+                .andRespond(withStatus(HttpStatus.valueOf(statusCode)));
+
+        assertThatThrownBy(() -> openAiEmbeddingClient.embed(
+                new EmbeddingRequest("인증 오류 테스트")
+        )).isInstanceOf(AiClientException.class)
+                .satisfies(exception -> assertThat(
+                        ((AiClientException) exception).httpStatusCode()
+                ).isEqualTo(statusCode));
 
         mockServer.verify();
     }

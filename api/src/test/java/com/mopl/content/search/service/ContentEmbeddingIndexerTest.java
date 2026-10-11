@@ -21,10 +21,13 @@ import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.core.common.enums.ContentType;
+import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.config.AiProperties;
+import com.mopl.infrastructure.ai.exception.AiClientException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +39,8 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -48,6 +53,7 @@ import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class ContentEmbeddingIndexerTest {
@@ -524,6 +530,185 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void backfillMissingStopsImmediatelyOn401AuthenticationFailure() {
+        assertBackfillStopsOnAuthenticationFailure(401);
+    }
+
+    @Test
+    void backfillMissingStopsImmediatelyOn403AuthenticationFailure() {
+        assertBackfillStopsOnAuthenticationFailure(403);
+    }
+
+    @Test
+    void backfillMissingStopsAfterFiveConsecutiveFailures() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(7);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenThrow(new RuntimeException("OpenAI unavailable"));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(5L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(5))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingResetsConsecutiveFailuresAfterSuccess() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(9);
+        AtomicInteger calls = new AtomicInteger();
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenAnswer(invocation -> {
+                    int call = calls.incrementAndGet();
+                    if (call == 3) {
+                        return List.of(0.1D);
+                    }
+                    throw new RuntimeException("OpenAI unavailable");
+                });
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(1L);
+        assertThat(result.failed()).isEqualTo(7L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(1L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(8))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations).update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingUsesConfiguredConsecutiveFailureThreshold() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(4);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenThrow(new RuntimeException("OpenAI unavailable"));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.failed()).isEqualTo(2L);
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(2))
+                .embedContent(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingDoesNotCountElasticsearchUpdateFailuresAsOpenAiFailures() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(6);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        doThrow(new RuntimeException("Elasticsearch update unavailable"))
+                .when(elasticsearchOperations)
+                .update(any(UpdateQuery.class), any());
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(6L);
+        assertThat(result.unprocessed()).isZero();
+        assertThat(result.stoppedEarly()).isFalse();
+        verify(contentEmbeddingService, times(6))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(6))
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillMissingResetsOpenAiFailureCountWhenEmbeddingSucceedsButEsUpdateFails() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(5);
+        AtomicInteger embeddingCalls = new AtomicInteger();
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenAnswer(invocation -> {
+                    int call = embeddingCalls.incrementAndGet();
+                    if (call == 2) {
+                        return List.of(0.1D);
+                    }
+                    throw new RuntimeException("OpenAI unavailable");
+                });
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        doThrow(new RuntimeException("Elasticsearch update unavailable"))
+                .when(elasticsearchOperations)
+                .update(any(UpdateQuery.class), any());
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.failed()).isEqualTo(4L);
+        assertThat(result.unprocessed()).isEqualTo(1L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_FAILURE_LIMIT);
+        verify(contentEmbeddingService, times(4))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations).update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void rejectsNonPositiveConsecutiveFailureThreshold(int threshold) {
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveFailures",
+                threshold
+        );
+
+        assertThatThrownBy(contentEmbeddingIndexer::validateBackfillConfiguration)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "mopl.elasticsearch.embedding-backfill.max-consecutive-failures"
+                )
+                .hasMessageContaining("양수");
+    }
+
+    @Test
     void backfillMissingWrapsSecondBatchDatabaseFailureAfterFirstBatchCompletes() {
         enableAi();
 
@@ -571,7 +756,7 @@ class ContentEmbeddingIndexerTest {
 
         assertThatThrownBy(contentEmbeddingIndexer::backfillMissing)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("배치 처리에 실패했습니다.")
+                .hasMessageContaining("단계=DB 배치 처리")
                 .hasMessageContaining("성공=500")
                 .hasCause(databaseFailure);
 
@@ -600,7 +785,7 @@ class ContentEmbeddingIndexerTest {
 
         assertThatThrownBy(contentEmbeddingIndexer::backfillMissing)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("완료하지 못했습니다.");
+                .hasMessageContaining("단계=ES 스트림 조회");
 
         verify(searchHits).close();
         verify(indexOperations, never()).refresh();
@@ -637,9 +822,6 @@ class ContentEmbeddingIndexerTest {
                 .thenReturn(List.of());
         when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
                 .thenReturn(List.of(0.1D));
-        when(elasticsearchOperations.getIndexCoordinatesFor(
-                ContentSearchDocument.class
-        )).thenReturn(IndexCoordinates.of("contents"));
         when(elasticsearchOperations.indexOps(ContentSearchDocument.class))
                 .thenReturn(indexOperations);
 
@@ -713,9 +895,6 @@ class ContentEmbeddingIndexerTest {
                 .thenReturn(List.of());
         when(contentEmbeddingService.embedContent(content, List.of()))
                 .thenReturn(List.of(0.1D));
-        when(elasticsearchOperations.getIndexCoordinatesFor(
-                ContentSearchDocument.class
-        )).thenReturn(IndexCoordinates.of("contents"));
         when(elasticsearchOperations.indexOps(ContentSearchDocument.class))
                 .thenReturn(indexOperations);
         doThrow(new RuntimeException("refresh unavailable"))
@@ -723,12 +902,87 @@ class ContentEmbeddingIndexerTest {
 
         assertThatThrownBy(contentEmbeddingIndexer::backfillMissing)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("업데이트는 처리되었으나")
+                .hasMessageContaining("단계=ES Refresh")
                 .satisfies(exception -> assertThat(exception.getCause())
                         .hasMessage("refresh unavailable"));
 
         verify(elasticsearchOperations).update(any(UpdateQuery.class), any());
         verify(searchHits).close();
+    }
+
+    private void assertBackfillStopsOnAuthenticationFailure(int statusCode) {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(4);
+        when(contentEmbeddingService.embedContent(any(Content.class), anyList()))
+                .thenThrow(new AiClientException(
+                        "OpenAI 인증 실패",
+                        statusCode,
+                        new RuntimeException("HTTP " + statusCode)
+                ));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(1L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(3L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .AUTHENTICATION_ERROR);
+        verify(contentEmbeddingService, times(1))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any());
+        verify(fixture.searchHits()).close();
+    }
+
+    private BackfillFixture createBackfillFixture(int count) {
+        List<UUID> contentIds = IntStream.range(0, count)
+                .mapToObj(ignored -> UUID.randomUUID())
+                .toList();
+        Map<UUID, Content> contentsById = new HashMap<>();
+        contentIds.forEach(contentId -> {
+            Content indexedContent = new Content(
+                    ContentType.MOVIE,
+                    "Backfill test",
+                    null,
+                    null,
+                    ExternalSource.MANUAL,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+            ReflectionTestUtils.setField(indexedContent, "id", contentId);
+            contentsById.put(contentId, indexedContent);
+        });
+
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                createSearchHitsIterator(contentIds);
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        when(contentRepository.findAllByIdInAndDeletedAtIsNull(anyList()))
+                .thenAnswer(invocation -> {
+                    List<UUID> batchIds = invocation.getArgument(0);
+                    return batchIds.stream()
+                            .map(contentsById::get)
+                            .toList();
+                });
+        when(contentTagRepository.findAllByContentIds(anyCollection()))
+                .thenReturn(List.of());
+        when(elasticsearchOperations.indexOps(ContentSearchDocument.class))
+                .thenReturn(indexOperations);
+
+        return new BackfillFixture(searchHits);
+    }
+
+    private record BackfillFixture(
+            SearchHitsIterator<ContentSearchDocument> searchHits
+    ) {
     }
 
     private ContentEmbeddingIndexer createIndexer(

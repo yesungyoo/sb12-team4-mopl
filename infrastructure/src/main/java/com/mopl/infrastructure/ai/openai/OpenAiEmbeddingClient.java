@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
 import com.mopl.infrastructure.ai.config.AiProperties;
@@ -46,6 +47,12 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
 
             return new EmbeddingResponse(
                     extractEmbedding(response)
+            );
+        } catch (RestClientResponseException exception) {
+            throw new AiClientException(
+                    "OpenAI Embedding 호출에 실패했습니다.",
+                    exception.getStatusCode().value(),
+                    exception
             );
         } catch (RestClientException exception) {
             throw new AiClientException(
