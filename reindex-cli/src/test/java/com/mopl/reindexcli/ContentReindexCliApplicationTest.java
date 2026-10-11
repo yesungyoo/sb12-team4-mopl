@@ -1,6 +1,7 @@
 package com.mopl.reindexcli;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.mopl.content.search.kafka.ContentSearchSyncKafkaConsumer;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
@@ -8,8 +9,15 @@ import com.mopl.content.search.service.ContentEmbeddingService;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.notification.sse.SseHeartbeatScheduler;
 import com.mopl.user.config.AdminInitializer;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import java.util.HashMap;
 import java.util.Map;
+import org.hibernate.boot.MetadataSources;
+import org.hibernate.boot.registry.StandardServiceRegistry;
+import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+import org.hibernate.tool.schema.spi.SchemaManagementException;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
@@ -53,12 +61,45 @@ class ContentReindexCliApplicationTest {
                 .containsEntry("hibernate.hbm2ddl.auto", "validate")
                 .containsEntry(
                         "jakarta.persistence.schema-generation.database.action",
-                        "none"
+                        "validate"
                 )
                 .containsEntry(
                         "jakarta.persistence.schema-generation.scripts.action",
                         "none"
                 );
+    }
+
+    @Test
+    void hibernatePerformsJpaSchemaValidationWithoutCreatingSchema() {
+        HibernatePropertiesCustomizer customizer =
+                new ReindexCliPersistenceSafetyConfiguration()
+                        .schemaValidationOnly();
+        Map<String, Object> hibernateProperties = new HashMap<>();
+        customizer.customize(hibernateProperties);
+
+        // JPA 스키마 검증 설정 자체가 동작하는지 확인하려고 Hibernate 전용 설정은 제외합니다.
+        hibernateProperties.remove("hibernate.hbm2ddl.auto");
+        hibernateProperties.put("hibernate.connection.driver_class", "org.h2.Driver");
+        hibernateProperties.put(
+                "hibernate.connection.url",
+                "jdbc:h2:mem:reindex_cli_schema_validation"
+        );
+        hibernateProperties.put("hibernate.connection.username", "sa");
+        hibernateProperties.put("hibernate.connection.password", "");
+
+        StandardServiceRegistry registry = new StandardServiceRegistryBuilder()
+                .applySettings(hibernateProperties)
+                .build();
+        try {
+            assertThatThrownBy(() -> new MetadataSources(registry)
+                    .addAnnotatedClass(SchemaValidationProbe.class)
+                    .buildMetadata()
+                    .buildSessionFactory())
+                    .isInstanceOf(SchemaManagementException.class)
+                    .hasMessageContaining("missing table");
+        } finally {
+            StandardServiceRegistryBuilder.destroy(registry);
+        }
     }
 
     @Test
@@ -115,6 +156,7 @@ class ContentReindexCliApplicationTest {
                         "spring.datasource.username=sa",
                         "spring.datasource.password=",
                         "spring.elasticsearch.uris=http://127.0.0.1:1",
+                        "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration",
                         "mopl.ai.enabled=false"
                 )
                 .withInitializer(context -> {
@@ -127,21 +169,21 @@ class ContentReindexCliApplicationTest {
                 })
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-					assertThat(context.getBeanNamesForType(
-						ContentSearchIndexer.class, false, false
-					)).hasSize(1);
+                    assertThat(context.getBeanNamesForType(
+                            ContentSearchIndexer.class, false, false
+                    )).hasSize(1);
 
-					assertThat(context.getBeanNamesForType(
-						ContentEmbeddingIndexer.class, false, false
-					)).hasSize(1);
+                    assertThat(context.getBeanNamesForType(
+                            ContentEmbeddingIndexer.class, false, false
+                    )).hasSize(1);
 
-					assertThat(context.getBeanNamesForType(
-						ContentEmbeddingService.class, false, false
-					)).hasSize(1);
+                    assertThat(context.getBeanNamesForType(
+                            ContentEmbeddingService.class, false, false
+                    )).hasSize(1);
 
-					assertThat(context.getBeanNamesForType(
-						ContentReindexCliRunner.class, false, false
-					)).hasSize(1);
+                    assertThat(context.getBeanNamesForType(
+                            ContentReindexCliRunner.class, false, false
+                    )).hasSize(1);
                     var sourceContext = context.getSourceApplicationContext();
                     var environment = sourceContext.getEnvironment();
                     var beanFactory = sourceContext.getBeanFactory();
@@ -163,7 +205,7 @@ class ContentReindexCliApplicationTest {
                             .isEqualTo("validate");
                     assertThat(environment.getProperty(
                             "spring.jpa.properties.jakarta.persistence.schema-generation.database.action"
-                    )).isEqualTo("none");
+                    )).isEqualTo("validate");
                     assertThat(environment.getProperty(
                             "spring.jpa.properties.jakarta.persistence.schema-generation.scripts.action"
                     )).isEqualTo("none");
@@ -259,5 +301,13 @@ class ContentReindexCliApplicationTest {
         assertThat(ContentReindexCliApplication.startupFailureExitCode(
                 new IllegalStateException("Elasticsearch unavailable")
         )).isEqualTo(3);
+    }
+
+    @Entity
+    @Table(name = "reindex_cli_validation_probe")
+    public static class SchemaValidationProbe {
+
+        @Id
+        private Long id;
     }
 }

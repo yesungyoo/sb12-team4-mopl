@@ -24,7 +24,7 @@ public class ReindexCliEnvironmentInitializer
         properties.put("spring.sql.init.mode", "never");
         properties.put("spring.jpa.hibernate.ddl-auto", "validate");
         properties.put("spring.jpa.generate-ddl", false);
-        properties.put("spring.jpa.properties.jakarta.persistence.schema-generation.database.action", "none");
+        properties.put("spring.jpa.properties.jakarta.persistence.schema-generation.database.action", "validate");
         properties.put("spring.jpa.properties.jakarta.persistence.schema-generation.scripts.action", "none");
         properties.put("spring.ai.model.chat", "none");
         properties.put("spring.ai.model.embedding", "none");

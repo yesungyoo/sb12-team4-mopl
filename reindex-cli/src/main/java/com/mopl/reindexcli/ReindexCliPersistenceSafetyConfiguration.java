@@ -21,7 +21,7 @@ public class ReindexCliPersistenceSafetyConfiguration {
     HibernatePropertiesCustomizer schemaValidationOnly() {
         return hibernateProperties -> {
             hibernateProperties.put(HIBERNATE_DDL_AUTO, "validate");
-            hibernateProperties.put(JPA_DATABASE_ACTION, "none");
+            hibernateProperties.put(JPA_DATABASE_ACTION, "validate");
             hibernateProperties.put(JPA_SCRIPTS_ACTION, "none");
         };
     }
