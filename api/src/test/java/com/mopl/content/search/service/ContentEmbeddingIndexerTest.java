@@ -16,6 +16,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
@@ -27,7 +28,6 @@ import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.config.AiProperties;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -468,7 +468,6 @@ class ContentEmbeddingIndexerTest {
         List<UUID> contentIds = IntStream.range(0, 501)
                 .mapToObj(ignored -> UUID.randomUUID())
                 .toList();
-        assertThat(new HashSet<>(contentIds)).hasSize(501);
         Map<UUID, Content> contentsById = new HashMap<>();
         contentIds.forEach(contentId -> {
             Content content = mock(Content.class);
@@ -526,6 +525,70 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void backfillMissingWrapsSecondBatchDatabaseFailureAfterFirstBatchCompletes() {
+        enableAi();
+
+        List<UUID> contentIds = IntStream.range(0, 501)
+                .mapToObj(ignored -> UUID.randomUUID())
+                .toList();
+        Map<UUID, Content> contentsById = new HashMap<>();
+        contentIds.stream()
+                .limit(500)
+                .forEach(contentId -> {
+                    Content content = mock(Content.class);
+                    when(content.getId()).thenReturn(contentId);
+                    contentsById.put(contentId, content);
+                });
+        SearchHitsIterator<ContentSearchDocument> searchHits =
+                createSearchHitsIterator(contentIds);
+        RuntimeException databaseFailure =
+                new RuntimeException("MySQL unavailable");
+        AtomicInteger repositoryCalls = new AtomicInteger();
+
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(searchHits);
+        when(contentRepository.findAllByIdInAndDeletedAtIsNull(anyList()))
+                .thenAnswer(invocation -> {
+                    if (repositoryCalls.incrementAndGet() == 2) {
+                        throw databaseFailure;
+                    }
+
+                    List<UUID> batchIds = invocation.getArgument(0);
+                    return batchIds.stream()
+                            .map(contentsById::get)
+                            .toList();
+                });
+        when(contentTagRepository.findAllByContentIds(anyCollection()))
+                .thenReturn(List.of());
+        when(contentEmbeddingService.embedContent(
+                any(Content.class),
+                anyList()
+        )).thenReturn(List.of(0.1D));
+        when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+
+        assertThatThrownBy(contentEmbeddingIndexer::backfillMissing)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("배치 처리에 실패했습니다.")
+                .hasMessageContaining("성공=500")
+                .hasCause(databaseFailure);
+
+        verify(contentRepository, times(2))
+                .findAllByIdInAndDeletedAtIsNull(anyList());
+        verify(contentEmbeddingService, times(500))
+                .embedContent(any(Content.class), anyList());
+        verify(elasticsearchOperations, times(500))
+                .update(any(UpdateQuery.class), any());
+        verify(searchHits).close();
+        verify(searchHits, times(502)).hasNext();
+        verify(searchHits, times(501)).next();
+        verifyNoMoreInteractions(searchHits);
+    }
+
+    @Test
     void backfillMissingPropagatesStreamFailureWithoutEmbeddingProcessing() {
         enableAi();
 
@@ -538,7 +601,7 @@ class ContentEmbeddingIndexerTest {
         when(searchHits.hasNext())
                 .thenThrow(new RuntimeException("Elasticsearch unavailable"));
 
-        assertThatThrownBy(contentEmbeddingIndexer::reindexAll)
+        assertThatThrownBy(contentEmbeddingIndexer::backfillMissing)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("완료하지 못했습니다.");
 

@@ -143,9 +143,26 @@ public class ContentEmbeddingIndexer {
         }
 
         List<UUID> contentIds = new ArrayList<>(uniqueContentIds);
-        for (int start = 0; start < contentIds.size(); start += BATCH_SIZE) {
-            int end = Math.min(start + BATCH_SIZE, contentIds.size());
-            processBatch(contentIds.subList(start, end), counts);
+        try {
+            for (int start = 0; start < contentIds.size(); start += BATCH_SIZE) {
+                int end = Math.min(start + BATCH_SIZE, contentIds.size());
+                processBatch(contentIds.subList(start, end), counts);
+            }
+        } catch (RuntimeException exception) {
+            log.error(
+                    "콘텐츠 embedding Backfill 배치 처리에 실패했습니다. 성공={}, 실패={}, 건너뜀={}",
+                    counts.succeeded,
+                    counts.failed,
+                    counts.skipped,
+                    exception
+            );
+            throw new IllegalStateException(
+                    "콘텐츠 embedding Backfill 배치 처리에 실패했습니다. 성공="
+                            + counts.succeeded
+                            + ", 실패=" + counts.failed
+                            + ", 건너뜀=" + counts.skipped,
+                    exception
+            );
         }
 
         try {
