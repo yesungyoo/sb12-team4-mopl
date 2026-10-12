@@ -8,7 +8,6 @@ import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.exception.AiClientException;
-import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -102,21 +101,21 @@ public class ContentEmbeddingIndexer {
         return backfillMissing().succeeded();
     }
 
-    @PostConstruct
-    void validateBackfillConfiguration() {
+    public void validateBackfillConfiguration() {
         if (maxConsecutiveFailures <= 0) {
-            throw new IllegalStateException(
+            throw new BackfillConfigurationException(
                     "mopl.elasticsearch.embedding-backfill.max-consecutive-failures 설정은 양수여야 합니다."
             );
         }
         if (maxConsecutiveElasticsearchFailures <= 0) {
-            throw new IllegalStateException(
+            throw new BackfillConfigurationException(
                     "mopl.elasticsearch.embedding-backfill.max-consecutive-es-failures 설정은 양수여야 합니다."
             );
         }
     }
 
     public BackfillResult backfillMissing() {
+        validateBackfillConfiguration();
         if (!aiAvailability.isAvailable()) {
             return new BackfillResult(0L, 0L, 0L, 0L, BackfillStopReason.NONE);
         }
@@ -477,6 +476,13 @@ public class ContentEmbeddingIndexer {
         AUTHENTICATION_ERROR,
         CONSECUTIVE_FAILURE_LIMIT,
         CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT
+    }
+
+    public static class BackfillConfigurationException extends IllegalStateException {
+
+        public BackfillConfigurationException(String message) {
+            super(message);
+        }
     }
 
     public record BackfillResult(

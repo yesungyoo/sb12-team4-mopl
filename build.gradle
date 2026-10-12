@@ -6,6 +6,26 @@ plugins {
     id "com.ewerk.gradle.plugins.querydsl" version "1.0.10" apply false
 }
 
+class MockitoAgentArgumentProvider implements org.gradle.process.CommandLineArgumentProvider {
+    private final org.gradle.api.file.ConfigurableFileCollection agentClasspath
+
+    MockitoAgentArgumentProvider(
+            org.gradle.api.file.ConfigurableFileCollection agentClasspath
+    ) {
+        this.agentClasspath = agentClasspath
+    }
+
+    @org.gradle.api.tasks.Classpath
+    org.gradle.api.file.ConfigurableFileCollection getAgentClasspath() {
+        agentClasspath
+    }
+
+    @Override
+    Iterable<String> asArguments() {
+        ["-javaagent:${agentClasspath.singleFile.absolutePath}"]
+    }
+}
+
 allprojects {
     group = 'com.mopl'
     version = '0.0.1-SNAPSHOT'
@@ -53,5 +73,29 @@ subprojects {
             xml.required = true
             html.required = true
         }
+    }
+}
+
+project(':api') {
+    configurations {
+        mockitoAgent {
+            canBeConsumed = false
+            canBeResolved = true
+            transitive = false
+        }
+    }
+
+    dependencies {
+        mockitoAgent 'org.mockito:mockito-core'
+    }
+
+    def mockitoAgentConfiguration = configurations.mockitoAgent
+    tasks.withType(Test).configureEach {
+        def agentFiles = objects.fileCollection()
+        agentFiles.from(mockitoAgentConfiguration)
+
+        jvmArgumentProviders.add(
+                new MockitoAgentArgumentProvider(agentFiles)
+        )
     }
 }
