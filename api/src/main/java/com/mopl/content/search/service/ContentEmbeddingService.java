@@ -3,12 +3,17 @@ package com.mopl.content.search.service;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.config.AiProperties;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 
 @Service
@@ -16,14 +21,55 @@ import java.util.List;
 public class ContentEmbeddingService {
 
     private final EmbeddingClient embeddingClient;
+    private final AiProperties aiProperties;
 
     public List<Double> embedContent(Content content, List<ContentTag> contentTags) {
-        String input = buildEmbeddingInput(content, contentTags);
+        return embedContentWithMetadata(content, contentTags).embedding();
+    }
 
-        return embeddingClient.embed(
+    public EmbeddingGeneration embedContentWithMetadata(
+            Content content,
+            List<ContentTag> contentTags
+    ) {
+        String input = buildEmbeddingInput(content, contentTags);
+        String inputHash = calculateInputHash(input);
+        String model = aiProperties.embeddingModel();
+        List<Double> embedding = embeddingClient.embed(
                 new EmbeddingRequest(input)
         ).embedding();
 
+        return new EmbeddingGeneration(
+                embedding,
+                inputHash,
+                model
+        );
+    }
+
+    public String calculateInputHash(
+            Content content,
+            List<ContentTag> contentTags
+    ) {
+        return calculateInputHash(
+                buildEmbeddingInput(content, contentTags)
+        );
+    }
+
+    private String calculateInputHash(String input) {
+        try {
+            MessageDigest messageDigest =
+                    MessageDigest.getInstance("SHA-256");
+
+            return HexFormat.of().formatHex(
+                    messageDigest.digest(
+                            input.getBytes(StandardCharsets.UTF_8)
+                    )
+            );
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(
+                    "SHA-256 hash 알고리즘을 사용할 수 없습니다.",
+                    exception
+            );
+        }
     }
 
     private String buildEmbeddingInput(Content content, List<ContentTag> contentTags) {
@@ -53,5 +99,12 @@ public class ContentEmbeddingService {
         }
 
         return builder.toString();
+    }
+
+    public record EmbeddingGeneration(
+            List<Double> embedding,
+            String inputHash,
+            String model
+    ) {
     }
 }

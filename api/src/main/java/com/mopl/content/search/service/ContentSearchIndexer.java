@@ -45,16 +45,25 @@ public class ContentSearchIndexer {
     private static final int UPDATE_RETRY_ON_CONFLICT = 3;
     private static final String UPSERT_PRESERVING_EMBEDDING_SCRIPT = """
             def embedding = ctx._source.get('embedding');
+            def embeddingInputHash = ctx._source.get('embeddingInputHash');
+            def embeddingModel = ctx._source.get('embeddingModel');
             ctx._source.clear();
             ctx._source.putAll(params.document);
             if (embedding != null) {
                 ctx._source.put('embedding', embedding);
+            }
+            if (embeddingInputHash != null) {
+                ctx._source.put('embeddingInputHash', embeddingInputHash);
+            }
+            if (embeddingModel != null) {
+                ctx._source.put('embeddingModel', embeddingModel);
             }
             """;
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
+    private final ContentEmbeddingService contentEmbeddingService;
     private final ReviewRepository reviewRepository;
     private final ContentViewRepository contentViewRepository;
     private final ElasticsearchOperations elasticsearchOperations;
@@ -219,6 +228,8 @@ public class ContentSearchIndexer {
                         .mapObject(document);
 
         source.remove("embedding");
+        source.remove("embeddingInputHash");
+        source.remove("embeddingModel");
 
         return UpdateQuery.builder(document.getId())
                 .withScriptType(
@@ -479,12 +490,19 @@ public class ContentSearchIndexer {
             List<ContentTag> contentTags,
             SearchStatistics statistics
     ) {
+        String contentInputHash =
+                contentEmbeddingService.calculateInputHash(
+                        content,
+                        contentTags
+                );
+
         return ContentSearchDocument.from(
                 content,
                 contentTags,
                 statistics.averageRating(),
                 statistics.reviewCount(),
-                statistics.watcherCount()
+                statistics.watcherCount(),
+                contentInputHash
         );
     }
 

@@ -79,6 +79,9 @@ public class ContentSearchDocument {
     )
     private LocalDateTime createdAt;
 
+    @Field(type = FieldType.Keyword)
+    private String contentInputHash;
+
     @Field(
             type = FieldType.Dense_Vector,
             dims = EMBEDDING_DIMENSIONS,
@@ -87,6 +90,12 @@ public class ContentSearchDocument {
             knnSimilarity = KnnSimilarity.COSINE
     )
     private List<Float> embedding;
+
+    @Field(type = FieldType.Keyword)
+    private String embeddingInputHash;
+
+    @Field(type = FieldType.Keyword)
+    private String embeddingModel;
 
     public static ContentSearchDocument from(
             Content content,
@@ -113,10 +122,29 @@ public class ContentSearchDocument {
         return from(
                 content,
                 contentTags,
+                averageRating,
+                reviewCount,
+                watcherCount,
+                null
+        );
+    }
+
+    public static ContentSearchDocument from(
+            Content content,
+            List<ContentTag> contentTags,
+            Double averageRating,
+            long reviewCount,
+            long watcherCount,
+            String contentInputHash
+    ) {
+        return from(
+                content,
+                contentTags,
                 null,
                 averageRating,
                 reviewCount,
-                watcherCount
+                watcherCount,
+                contentInputHash
         );
     }
 
@@ -127,6 +155,26 @@ public class ContentSearchDocument {
             Double averageRating,
             long reviewCount,
             long watcherCount
+    ) {
+        return from(
+                content,
+                contentTags,
+                embedding,
+                averageRating,
+                reviewCount,
+                watcherCount,
+                null
+        );
+    }
+
+    private static ContentSearchDocument from(
+            Content content,
+            List<ContentTag> contentTags,
+            List<Double> embedding,
+            Double averageRating,
+            long reviewCount,
+            long watcherCount,
+            String contentInputHash
     ) {
         List<ContentTagSearchDocument> tags = contentTags.stream()
                 .map(ContentTagSearchDocument::from)
@@ -152,7 +200,10 @@ public class ContentSearchDocument {
                 watcherCount,
                 tags,
                 content.getCreatedAt(),
-                floatEmbedding
+                contentInputHash,
+                floatEmbedding,
+                null,
+                null
         );
     }
 
