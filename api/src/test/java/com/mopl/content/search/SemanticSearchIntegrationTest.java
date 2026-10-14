@@ -19,6 +19,7 @@ import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
+import com.mopl.infrastructure.ai.config.AiProperties;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
 import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -40,7 +43,13 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 @SpringBootTest(properties = {
@@ -86,6 +95,9 @@ public class SemanticSearchIntegrationTest {
     @Autowired
     private SemanticSearchService semanticSearchService;
 
+    @Autowired
+    private AiProperties aiProperties;
+
     @MockitoBean
     private EmbeddingClient embeddingClient;
 
@@ -99,11 +111,14 @@ public class SemanticSearchIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        contentSearchRepository.deleteAll();
+        var indexOperations = elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        );
+        if (indexOperations.exists()) {
+            indexOperations.delete();
+        }
+        indexOperations.createWithMapping();
         contentRepository.deleteAllInBatch();
-        elasticsearchOperations
-                .indexOps(ContentSearchDocument.class)
-                .refresh();
     }
 
     @Test
@@ -200,6 +215,138 @@ public class SemanticSearchIntegrationTest {
     }
 
     @Test
+    void ordinaryIndexingPreservesEmbeddingAndMetadataWhileUpdatingContentFields() {
+        Content content = createContent(
+                "Original Indexed Title",
+                "Original indexed description"
+        );
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        List<Double> generatedEmbedding = createVector(2);
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(generatedEmbedding));
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument beforeUpdate = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        String previousContentInputHash = beforeUpdate.getContentInputHash();
+        String embeddingInputHash = beforeUpdate.getEmbeddingInputHash();
+        String embeddingModel = beforeUpdate.getEmbeddingModel();
+        List<Float> existingEmbedding = List.copyOf(beforeUpdate.getEmbedding());
+
+        content.update(
+                null,
+                "Updated Indexed Title",
+                "Updated indexed description",
+                null,
+                null
+        );
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        ContentSearchDocument afterUpdate = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+
+        assertThat(afterUpdate.getTitle()).isEqualTo("Updated Indexed Title");
+        assertThat(afterUpdate.getDescription())
+                .isEqualTo("Updated indexed description");
+        assertThat(afterUpdate.getContentInputHash())
+                .isNotEqualTo(previousContentInputHash);
+        assertThat(afterUpdate.getEmbedding())
+                .containsExactlyElementsOf(existingEmbedding);
+        assertThat(afterUpdate.getEmbeddingInputHash())
+                .isEqualTo(embeddingInputHash);
+        assertThat(afterUpdate.getEmbeddingModel())
+                .isEqualTo(embeddingModel);
+    }
+
+    @Test
+    void delayedEmbeddingForOldInputCannotOverwriteLatestEmbedding() throws Exception {
+        String oldTitle = "Old Embedding Input Title";
+        String latestTitle = "Latest Embedding Input Title";
+        Content content = createContent(oldTitle, "Original description");
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        String oldInputHash = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow()
+                .getContentInputHash();
+        CountDownLatch oldEmbeddingStarted = new CountDownLatch(1);
+        CountDownLatch allowOldEmbeddingToFinish = new CountDownLatch(1);
+        AtomicBoolean oldEmbeddingReturned = new AtomicBoolean(false);
+        List<Double> oldEmbedding = createVector(0);
+        List<Double> latestEmbedding = createVector(1);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenAnswer(invocation -> {
+                    EmbeddingRequest request = invocation.getArgument(0);
+                    if (request.input().contains(oldTitle)) {
+                        oldEmbeddingStarted.countDown();
+                        if (!allowOldEmbeddingToFinish.await(30, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException(
+                                    "Timed out waiting to release old embedding"
+                            );
+                        }
+                        oldEmbeddingReturned.set(true);
+                        return new EmbeddingResponse(oldEmbedding);
+                    }
+                    return new EmbeddingResponse(latestEmbedding);
+                });
+
+        CompletableFuture<Void> oldEmbeddingTask = CompletableFuture.runAsync(
+                () -> contentEmbeddingIndexer.index(content)
+        );
+
+        try {
+            assertThat(oldEmbeddingStarted.await(30, TimeUnit.SECONDS))
+                    .isTrue();
+
+            content.update(
+                    null,
+                    latestTitle,
+                    "Latest description",
+                    null,
+                    null
+            );
+            contentRepository.saveAndFlush(content);
+            contentSearchIndexer.index(content);
+            contentEmbeddingIndexer.index(content);
+        } finally {
+            allowOldEmbeddingToFinish.countDown();
+            oldEmbeddingTask.get(30, TimeUnit.SECONDS);
+        }
+
+		assertThat(oldEmbeddingReturned.get())
+			.as("the stale embedding request should return its vector")
+			.isTrue();
+
+        ContentSearchDocument latestDocument = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        assertThat(latestDocument.getTitle()).isEqualTo(latestTitle);
+        assertThat(latestDocument.getDescription())
+                .isEqualTo("Latest description");
+        assertThat(latestDocument.getContentInputHash())
+                .isNotEqualTo(oldInputHash);
+        assertThat(latestDocument.getEmbedding())
+                .containsExactlyElementsOf(
+                        latestEmbedding.stream()
+                                .map(Double::floatValue)
+                                .toList()
+                );
+        assertThat(latestDocument.getEmbeddingInputHash())
+                .isEqualTo(latestDocument.getContentInputHash());
+        assertThat(latestDocument.getEmbeddingModel())
+                .isEqualTo(aiProperties.embeddingModel());
+        verify(embeddingClient, times(2))
+                .embed(any(EmbeddingRequest.class));
+    }
+
+    @Test
     void embeddingIndexDoesNothingWhenElasticsearchDocumentIsMissing() {
         Content content = createContent(
                 "Deleted Elasticsearch Document",
@@ -246,8 +393,28 @@ public class SemanticSearchIntegrationTest {
                 "기존 Embedding 콘텐츠",
                 "이미 벡터가 있는 검색 문서"
         );
+        Content missingInputHashContent = createContent(
+                "입력 hash 누락 Embedding 콘텐츠",
+                "재생성이 필요한 기존 Embedding 문서"
+        );
+        Content missingModelContent = createContent(
+                "모델 누락 Embedding 콘텐츠",
+                "재생성이 필요한 기존 Embedding 문서"
+        );
+        Content mismatchedInputHashContent = createContent(
+                "입력 hash 불일치 Embedding 콘텐츠",
+                "재생성이 필요한 기존 Embedding 문서"
+        );
+        Content mismatchedModelContent = createContent(
+                "모델 불일치 Embedding 콘텐츠",
+                "재생성이 필요한 기존 Embedding 문서"
+        );
         List<Content> contents = new ArrayList<>();
         contents.add(existingEmbeddingContent);
+        contents.add(missingInputHashContent);
+        contents.add(missingModelContent);
+        contents.add(mismatchedInputHashContent);
+        contents.add(mismatchedModelContent);
         contents.addAll(IntStream.range(0, 501)
                 .mapToObj(index -> createContent(
                         "누락 Embedding 콘텐츠 " + index,
@@ -274,14 +441,40 @@ public class SemanticSearchIntegrationTest {
         contentRepository.deleteById(mysqlMissingContent.getId());
         contentRepository.flush();
 
-        List<Double> existingEmbedding = IntStream.range(0, EMBEDDING_DIMENSIONS)
-                .mapToObj(ignored -> 0.25D)
+        List<Float> existingEmbedding = IntStream.range(0, EMBEDDING_DIMENSIONS)
+                .mapToObj(ignored -> 0.25F)
                 .toList();
-        contentSearchRepository.save(ContentSearchDocument.from(
+        String existingInputHash = findIndexedInputHash(existingEmbeddingContent);
+        indexEmbeddingFixture(
                 existingEmbeddingContent,
-                List.of(),
-                existingEmbedding
-        ));
+                existingEmbedding,
+                existingInputHash,
+                aiProperties.embeddingModel()
+        );
+        indexEmbeddingFixture(
+                missingInputHashContent,
+                existingEmbedding,
+                null,
+                aiProperties.embeddingModel()
+        );
+        indexEmbeddingFixture(
+                missingModelContent,
+                existingEmbedding,
+                findIndexedInputHash(missingModelContent),
+                null
+        );
+        indexEmbeddingFixture(
+                mismatchedInputHashContent,
+                existingEmbedding,
+                "stale-input-hash",
+                aiProperties.embeddingModel()
+        );
+        indexEmbeddingFixture(
+                mismatchedModelContent,
+                existingEmbedding,
+                findIndexedInputHash(mismatchedModelContent),
+                "previous-embedding-model"
+        );
         elasticsearchOperations
                 .indexOps(ContentSearchDocument.class)
                 .refresh();
@@ -292,10 +485,10 @@ public class SemanticSearchIntegrationTest {
         ContentEmbeddingIndexer.BackfillResult result =
                 contentEmbeddingIndexer.backfillMissing();
 
-        assertThat(result.succeeded()).isEqualTo(501L);
+        assertThat(result.succeeded()).isEqualTo(505L);
         assertThat(result.failed()).isZero();
         assertThat(result.skipped()).isEqualTo(2L);
-        verify(embeddingClient, times(501))
+        verify(embeddingClient, times(505))
                 .embed(any(EmbeddingRequest.class));
 
         ContentSearchDocument existingDocument = contentSearchRepository
@@ -306,8 +499,19 @@ public class SemanticSearchIntegrationTest {
         assertThat(existingDocument.getEmbedding())
                 .hasSize(EMBEDDING_DIMENSIONS)
                 .allMatch(value -> value.equals(0.25F));
+        assertThat(existingDocument.getContentInputHash())
+                .isEqualTo(existingInputHash);
+        assertThat(existingDocument.getEmbeddingInputHash())
+                .isEqualTo(existingInputHash);
+        assertThat(existingDocument.getEmbeddingModel())
+                .isEqualTo(aiProperties.embeddingModel());
 
-        Content backfilledContent = contents.get(1);
+        assertBackfilledEmbeddingMetadata(missingInputHashContent);
+        assertBackfilledEmbeddingMetadata(missingModelContent);
+        assertBackfilledEmbeddingMetadata(mismatchedInputHashContent);
+        assertBackfilledEmbeddingMetadata(mismatchedModelContent);
+
+        Content backfilledContent = contents.get(5);
         ContentSearchDocument backfilledDocument = contentSearchRepository
                 .findById(backfilledContent.getId().toString())
                 .orElseThrow();
@@ -335,6 +539,74 @@ public class SemanticSearchIntegrationTest {
         assertThat(secondResult.failed()).isZero();
         assertThat(secondResult.skipped()).isEqualTo(2L);
         verifyNoInteractions(embeddingClient);
+    }
+
+    private String findIndexedInputHash(Content content) {
+        return contentSearchRepository.findById(content.getId().toString())
+                .orElseThrow()
+                .getContentInputHash();
+    }
+
+    private void indexEmbeddingFixture(
+            Content content,
+            List<Float> embedding,
+            String embeddingInputHash,
+            String embeddingModel
+    ) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("embedding", embedding);
+        params.put("removeEmbeddingInputHash", embeddingInputHash == null);
+        params.put("removeEmbeddingModel", embeddingModel == null);
+        if (embeddingInputHash != null) {
+            params.put("embeddingInputHash", embeddingInputHash);
+        }
+        if (embeddingModel != null) {
+            params.put("embeddingModel", embeddingModel);
+        }
+
+        UpdateQuery updateQuery = UpdateQuery.builder(content.getId().toString())
+                .withScriptType(ScriptType.INLINE)
+                .withScript("""
+                        ctx._source.embedding = params.embedding;
+                        if (params.removeEmbeddingInputHash) {
+                            ctx._source.remove('embeddingInputHash');
+                        } else {
+                            ctx._source.embeddingInputHash = params.embeddingInputHash;
+                        }
+                        if (params.removeEmbeddingModel) {
+                            ctx._source.remove('embeddingModel');
+                        } else {
+                            ctx._source.embeddingModel = params.embeddingModel;
+                        }
+                        """)
+                .withParams(params)
+                .build();
+
+        elasticsearchOperations.update(
+                updateQuery,
+                elasticsearchOperations.getIndexCoordinatesFor(
+                        ContentSearchDocument.class
+                )
+        );
+    }
+
+    private void assertBackfilledEmbeddingMetadata(Content content) {
+        ContentSearchDocument document = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+
+        assertThat(document.getEmbedding())
+                .hasSize(EMBEDDING_DIMENSIONS)
+                .containsExactlyElementsOf(
+                        createVector(1).stream()
+                                .map(Double::floatValue)
+                                .toList()
+                );
+        assertThat(document.getEmbeddingInputHash())
+                .isEqualTo(document.getContentInputHash())
+                .isNotBlank();
+        assertThat(document.getEmbeddingModel())
+                .isEqualTo(aiProperties.embeddingModel());
     }
 
     @Test

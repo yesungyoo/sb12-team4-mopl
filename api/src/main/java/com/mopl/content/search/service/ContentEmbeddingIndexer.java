@@ -7,25 +7,30 @@ import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
+import com.mopl.infrastructure.ai.config.AiProperties;
 import com.mopl.infrastructure.ai.exception.AiClientException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
-import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
+import org.springframework.data.elasticsearch.core.query.UpdateResponse;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 @Slf4j
 @Service
@@ -34,12 +39,24 @@ public class ContentEmbeddingIndexer {
     private static final int BATCH_SIZE = 500;
     private static final int UPDATE_RETRY_ON_CONFLICT = 3;
     private static final int SEARCH_SCROLL_BATCH_SIZE = 500;
+    private static final String UPDATE_EMBEDDING_IF_INPUT_CURRENT_SCRIPT = """
+            if (ctx._source.containsKey('contentInputHash')
+                    && ctx._source.contentInputHash != null
+                    && ctx._source.contentInputHash == params.embeddingInputHash) {
+                ctx._source.embedding = params.embedding;
+                ctx._source.embeddingInputHash = params.embeddingInputHash;
+                ctx._source.embeddingModel = params.embeddingModel;
+            } else {
+                ctx.op = 'noop';
+            }
+            """;
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
     private final ContentSearchRepository contentSearchRepository;
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentEmbeddingService contentEmbeddingService;
+    private final AiProperties aiProperties;
     private final AiAvailability aiAvailability;
 
     @Value("${mopl.elasticsearch.embedding-backfill.max-consecutive-failures:5}")
@@ -54,6 +71,7 @@ public class ContentEmbeddingIndexer {
             ContentSearchRepository contentSearchRepository,
             ElasticsearchOperations elasticsearchOperations,
             ContentEmbeddingService contentEmbeddingService,
+            AiProperties aiProperties,
             AiAvailability aiAvailability
     ) {
         this.contentRepository = contentRepository;
@@ -61,6 +79,7 @@ public class ContentEmbeddingIndexer {
         this.contentSearchRepository = contentSearchRepository;
         this.elasticsearchOperations = elasticsearchOperations;
         this.contentEmbeddingService = contentEmbeddingService;
+        this.aiProperties = aiProperties;
         this.aiAvailability = aiAvailability;
     }
 
@@ -78,10 +97,10 @@ public class ContentEmbeddingIndexer {
             contentSearchRepository
                     .findById(content.getId().toString())
                     .ifPresentOrElse(
-                            ignored -> embedAndUpdate(
+                            document -> indexExistingDocument(
                                     content,
                                     contentTags,
-                                    RefreshPolicy.IMMEDIATE
+                                    document
                             ),
                             () -> log.warn(
                                     "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
@@ -95,6 +114,77 @@ public class ContentEmbeddingIndexer {
                     exception
             );
         }
+    }
+
+    private void indexExistingDocument(
+            Content content,
+            List<ContentTag> contentTags,
+            ContentSearchDocument document
+    ) {
+        String currentInputHash =
+                contentEmbeddingService.calculateInputHash(
+                        content,
+                        contentTags
+                );
+        String indexedInputHash = document.getContentInputHash();
+
+        if (!Objects.equals(
+                indexedInputHash,
+                currentInputHash
+        )) {
+            log.warn(
+                    "일반 색인의 contentInputHash가 현재 DB 입력과 일치하지 않아 embedding 재계산을 건너뜁니다. contentId={}, contentInputHash={}, currentInputHash={}",
+                    content.getId(),
+                    indexedInputHash,
+                    currentInputHash
+            );
+            return;
+        }
+
+        if (!requiresEmbeddingRecalculation(
+                document,
+                currentInputHash,
+                aiProperties.embeddingModel()
+        )) {
+            return;
+        }
+
+        embedAndUpdate(
+                content,
+                contentTags,
+                RefreshPolicy.IMMEDIATE
+        );
+    }
+
+    private boolean requiresEmbeddingRecalculation(
+            ContentSearchDocument document,
+            String currentInputHash,
+            String currentModel
+    ) {
+        List<Float> embedding = document.getEmbedding();
+
+        return embedding == null
+                || embedding.isEmpty()
+                || requiresEmbeddingMetadataRecalculation(
+                        document,
+                        currentInputHash,
+                        currentModel
+                );
+    }
+
+    private boolean requiresEmbeddingMetadataRecalculation(
+            ContentSearchDocument document,
+            String currentInputHash,
+            String currentModel
+    ) {
+        return !Objects.equals(
+                        document.getEmbeddingInputHash(),
+                        currentInputHash
+                )
+                || !Objects.equals(
+                        document.getEmbeddingModel(),
+                        currentModel
+                );
     }
 
     public long reindexAll() {
@@ -121,12 +211,15 @@ public class ContentEmbeddingIndexer {
         }
 
         BackfillCounts counts = new BackfillCounts();
-        LinkedHashSet<UUID> uniqueContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> candidateContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> currentMetadataContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> seenContentIds = new LinkedHashSet<>();
+        String currentModel = aiProperties.embeddingModel();
 
         try {
             try (SearchHitsIterator<ContentSearchDocument> searchHits =
                          elasticsearchOperations.searchForStream(
-                                 buildMissingEmbeddingQuery(),
+                                 buildEmbeddingMetadataScanQuery(),
                                  ContentSearchDocument.class
                          )) {
                 while (searchHits.hasNext()) {
@@ -134,12 +227,34 @@ public class ContentEmbeddingIndexer {
                             searchHits.next();
                     try {
                         UUID contentId = UUID.fromString(searchHit.getId());
-                        if (!uniqueContentIds.add(contentId)) {
+                        if (!seenContentIds.add(contentId)) {
                             counts.skipped++;
                             log.warn(
                                     "embedding Backfill 검색 결과에 중복 문서 ID가 있어 건너뜁니다. contentId={}",
                                     contentId
                             );
+                            continue;
+                        }
+
+                        ContentSearchDocument document = searchHit.getContent();
+                        String indexedInputHash = document.getContentInputHash();
+                        if (!StringUtils.hasText(indexedInputHash)
+                                || requiresEmbeddingMetadataRecalculation(
+                                        document,
+                                        indexedInputHash,
+                                        currentModel
+                                )) {
+                            candidateContentIds.add(contentId);
+                        } else {
+                            currentMetadataContentIds.add(contentId);
+                            if (currentMetadataContentIds.size() == BATCH_SIZE) {
+                                collectMissingEmbeddingIds(
+                                        new ArrayList<>(currentMetadataContentIds),
+                                        candidateContentIds,
+                                        counts
+                                );
+                                currentMetadataContentIds.clear();
+                            }
                         }
                     } catch (IllegalArgumentException exception) {
                         counts.skipped++;
@@ -150,6 +265,11 @@ public class ContentEmbeddingIndexer {
                     }
                 }
             }
+            collectMissingEmbeddingIds(
+                    new ArrayList<>(currentMetadataContentIds),
+                    candidateContentIds,
+                    counts
+            );
         } catch (RuntimeException exception) {
             log.error(
                     "콘텐츠 Embedding Backfill 실패. 단계=ES 스트림 조회, 성공={}, 실패={}, 건너뜀={}",
@@ -166,7 +286,7 @@ public class ContentEmbeddingIndexer {
             );
         }
 
-        List<UUID> contentIds = new ArrayList<>(uniqueContentIds);
+        List<UUID> contentIds = new ArrayList<>(candidateContentIds);
         counts.totalTargets = contentIds.size();
         try {
             for (int start = 0; start < contentIds.size(); start += BATCH_SIZE) {
@@ -235,22 +355,117 @@ public class ContentEmbeddingIndexer {
         );
     }
 
-    private NativeQuery buildMissingEmbeddingQuery() {
+    private NativeQuery buildEmbeddingMetadataScanQuery() {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.matchAll(matchAll -> matchAll))
+                // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
+                .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
+                .build();
+
+        addEmbeddingMetadataSourceFilter(query);
+        return query;
+    }
+
+    private NativeQuery buildMissingEmbeddingByIdsQuery(
+            List<UUID> contentIds
+    ) {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
+                        .must(must -> must.ids(ids -> ids.values(
+                                contentIds.stream()
+                                        .map(UUID::toString)
+                                        .toList()
+                        )))
                         .mustNot(mustNot -> mustNot.exists(exists -> exists
                                 .field("embedding")
                         ))
                 ))
-                // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
                 .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
                 .build();
 
         query.addSourceFilter(FetchSourceFilter.of(
                 builder -> builder.withIncludes("id")
         ));
-
         return query;
+    }
+
+    private NativeQuery buildDocumentMetadataQuery(UUID contentId) {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.ids(ids -> ids.values(
+                        List.of(contentId.toString())
+                )))
+                .build();
+
+        addEmbeddingMetadataSourceFilter(query);
+        return query;
+    }
+
+    private NativeQuery buildDocumentEmbeddingExistsQuery(UUID contentId) {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
+                        .must(must -> must.ids(ids -> ids.values(
+                                List.of(contentId.toString())
+                        )))
+                        .must(must -> must.exists(exists -> exists
+                                .field("embedding")
+                        ))
+                ))
+                .build();
+
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
+        ));
+        return query;
+    }
+
+    private void addEmbeddingMetadataSourceFilter(NativeQuery query) {
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes(
+                        "id",
+                        "contentInputHash",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                )
+        ));
+    }
+
+    private void collectMissingEmbeddingIds(
+            List<UUID> contentIds,
+            LinkedHashSet<UUID> candidateContentIds,
+            BackfillCounts counts
+    ) {
+        if (contentIds.isEmpty()) {
+            return;
+        }
+
+        LinkedHashSet<String> seenDocumentIds = new LinkedHashSet<>();
+        try (SearchHitsIterator<ContentSearchDocument> searchHits =
+                     elasticsearchOperations.searchForStream(
+                             buildMissingEmbeddingByIdsQuery(contentIds),
+                             ContentSearchDocument.class
+                     )) {
+            while (searchHits.hasNext()) {
+                SearchHit<ContentSearchDocument> searchHit = searchHits.next();
+                String documentId = searchHit.getId();
+                try {
+                    UUID contentId = UUID.fromString(documentId);
+                    if (!seenDocumentIds.add(documentId)) {
+                        log.warn(
+                                "embedding Backfill 검색 결과에 중복 문서 ID가 있어 건너뜁니다. contentId={}",
+                                contentId
+                        );
+                        continue;
+                    }
+                    candidateContentIds.add(contentId);
+                } catch (IllegalArgumentException exception) {
+                    counts.skipped++;
+                    log.warn(
+                            "embedding Backfill 검색 결과의 문서 ID가 UUID 형식이 아니어서 건너뜁니다. documentId={}",
+                            documentId
+                    );
+                }
+            }
+        }
     }
 
     private boolean processBatch(
@@ -280,7 +495,7 @@ public class ContentEmbeddingIndexer {
 
             EmbeddingUpdateResult result;
             try {
-                result = embedAndUpdate(
+                result = embedIfNeeded(
                         content,
                         contentTags,
                         RefreshPolicy.NONE
@@ -310,6 +525,12 @@ public class ContentEmbeddingIndexer {
             counts.processedTargets++;
             if (result == EmbeddingUpdateResult.SUCCEEDED) {
                 counts.succeeded++;
+                counts.consecutiveFailures = 0;
+                counts.consecutiveElasticsearchFailures = 0;
+            } else if (result == EmbeddingUpdateResult.STALE_REJECTED
+                    || result == EmbeddingUpdateResult.DOCUMENT_NOT_FOUND
+                    || result == EmbeddingUpdateResult.ALREADY_CURRENT) {
+                counts.skipped++;
                 counts.consecutiveFailures = 0;
                 counts.consecutiveElasticsearchFailures = 0;
             } else if (result == EmbeddingUpdateResult.EMBEDDING_FAILED) {
@@ -352,14 +573,116 @@ public class ContentEmbeddingIndexer {
         return false;
     }
 
+    private EmbeddingUpdateResult embedIfNeeded(
+            Content content,
+            List<ContentTag> contentTags,
+            RefreshPolicy refreshPolicy
+    ) {
+        UUID contentId = content.getId();
+        String currentInputHash;
+        SearchHit<ContentSearchDocument> documentHit;
+        try {
+            currentInputHash = contentEmbeddingService.calculateInputHash(
+                    content,
+                    contentTags
+            );
+            documentHit = elasticsearchOperations.searchOne(
+                    buildDocumentMetadataQuery(contentId),
+                    ContentSearchDocument.class,
+                    elasticsearchOperations.getIndexCoordinatesFor(
+                            ContentSearchDocument.class
+                    )
+            );
+        } catch (ResourceNotFoundException exception) {
+            log.warn(
+                    "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "embedding Backfill 최신 상태 확인에 실패했습니다. contentId={}",
+                    contentId,
+                    exception
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+
+        if (documentHit == null) {
+            log.warn(
+                    "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
+        }
+
+        ContentSearchDocument document = documentHit.getContent();
+        String indexedInputHash = document.getContentInputHash();
+        if (!StringUtils.hasText(indexedInputHash)) {
+            log.warn(
+                    "contentInputHash가 없어 일반 SYNC_DATA가 필요하므로 embedding Backfill을 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.STALE_REJECTED;
+        }
+        if (!Objects.equals(indexedInputHash, currentInputHash)) {
+            log.warn(
+                    "Elasticsearch contentInputHash가 현재 DB 입력과 달라 embedding Backfill을 건너뜁니다. contentId={}, contentInputHash={}, currentInputHash={}",
+                    contentId,
+                    indexedInputHash,
+                    currentInputHash
+            );
+            return EmbeddingUpdateResult.STALE_REJECTED;
+        }
+
+        String currentModel = aiProperties.embeddingModel();
+        boolean hasEmbedding;
+        try {
+            hasEmbedding = !requiresEmbeddingMetadataRecalculation(
+                    document,
+                    currentInputHash,
+                    currentModel
+            ) && hasEmbedding(contentId);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "embedding Backfill 최신 벡터 상태 확인에 실패했습니다. contentId={}",
+                    contentId,
+                    exception
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+        if (hasEmbedding) {
+            log.debug(
+                    "embedding이 이미 최신 상태여서 Backfill을 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.ALREADY_CURRENT;
+        }
+
+        return embedAndUpdate(content, contentTags, refreshPolicy);
+    }
+
+    private boolean hasEmbedding(UUID contentId) {
+        return elasticsearchOperations.searchOne(
+                buildDocumentEmbeddingExistsQuery(contentId),
+                ContentSearchDocument.class,
+                elasticsearchOperations.getIndexCoordinatesFor(
+                        ContentSearchDocument.class
+                )
+        ) != null;
+    }
+
     private EmbeddingUpdateResult embedAndUpdate(
             Content content,
             List<ContentTag> contentTags,
             RefreshPolicy refreshPolicy
     ) {
-        List<Double> embedding;
+        ContentEmbeddingService.EmbeddingGeneration generation;
         try {
-            embedding = contentEmbeddingService.embedContent(content, contentTags);
+            generation = contentEmbeddingService.embedContentWithMetadata(
+                    content,
+                    contentTags
+            );
         } catch (RuntimeException exception) {
             if (findAuthenticationStatusCode(exception) != null) {
                 throw exception;
@@ -372,34 +695,54 @@ public class ContentEmbeddingIndexer {
             return EmbeddingUpdateResult.EMBEDDING_FAILED;
         }
 
-        if (embedding == null || embedding.isEmpty()) {
+        if (generation == null
+                || generation.embedding() == null
+                || generation.embedding().isEmpty()
+                || !StringUtils.hasText(generation.inputHash())
+                || !StringUtils.hasText(generation.model())) {
             log.warn(
-                    "콘텐츠 Embedding 생성 결과가 비어 있습니다. contentId={}",
+                    "콘텐츠 Embedding 생성 결과 또는 메타데이터가 비어 있습니다. contentId={}",
                     content.getId()
             );
             return EmbeddingUpdateResult.EMBEDDING_FAILED;
         }
 
-        List<Float> floatEmbedding = embedding.stream()
+        List<Float> floatEmbedding = generation.embedding().stream()
                 .map(Double::floatValue)
                 .toList();
-        Document updateDocument = Document.create();
-        updateDocument.put("embedding", floatEmbedding);
 
         UpdateQuery updateQuery = UpdateQuery.builder(content.getId().toString())
-                .withDocument(updateDocument)
+                .withScriptType(ScriptType.INLINE)
+                .withScript(UPDATE_EMBEDDING_IF_INPUT_CURRENT_SCRIPT)
+                .withParams(Map.of(
+                        "embedding",
+                        floatEmbedding,
+                        "embeddingInputHash",
+                        generation.inputHash(),
+                        "embeddingModel",
+                        generation.model()
+                ))
                 .withRetryOnConflict(UPDATE_RETRY_ON_CONFLICT)
                 .withRefreshPolicy(refreshPolicy)
                 .build();
 
         try {
-            elasticsearchOperations.update(
+            UpdateResponse updateResponse = elasticsearchOperations.update(
                     updateQuery,
                     elasticsearchOperations.getIndexCoordinatesFor(
                             ContentSearchDocument.class
                     )
             );
-            return EmbeddingUpdateResult.SUCCEEDED;
+            return resolveUpdateResult(
+                    content.getId(),
+                    updateResponse
+            );
+        } catch (ResourceNotFoundException exception) {
+            log.warn(
+                    "콘텐츠 Embedding 저장 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                    content.getId()
+            );
+            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
         } catch (RuntimeException exception) {
             log.warn(
                     "콘텐츠 Embedding 저장 단계에서 Elasticsearch 업데이트에 실패했습니다. contentId={}",
@@ -408,6 +751,54 @@ public class ContentEmbeddingIndexer {
             );
             return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
         }
+    }
+
+    private EmbeddingUpdateResult resolveUpdateResult(
+            UUID contentId,
+            UpdateResponse updateResponse
+    ) {
+        if (updateResponse == null) {
+            log.warn(
+                    "콘텐츠 Embedding 저장 결과가 비어 있습니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+
+        UpdateResponse.Result result = updateResponse.getResult();
+        if (result == null) {
+            log.warn(
+                    "콘텐츠 Embedding 저장 결과 유형이 비어 있습니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+
+        return switch (result) {
+            case UPDATED -> EmbeddingUpdateResult.SUCCEEDED;
+            case NOOP -> {
+                log.warn(
+                        "최신 contentInputHash와 생성 당시 hash가 일치하지 않아 stale embedding 업데이트를 거부했습니다. contentId={}",
+                        contentId
+                );
+                yield EmbeddingUpdateResult.STALE_REJECTED;
+            }
+            case NOT_FOUND -> {
+                log.warn(
+                        "콘텐츠 Embedding 저장 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                        contentId
+                );
+                yield EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
+            }
+            default -> {
+                log.warn(
+                        "예상하지 못한 콘텐츠 Embedding 저장 결과입니다. contentId={}, result={}",
+                        contentId,
+                        result
+                );
+                yield EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+            }
+        };
     }
 
     private Integer findAuthenticationStatusCode(Throwable failure) {
@@ -467,6 +858,9 @@ public class ContentEmbeddingIndexer {
 
     private enum EmbeddingUpdateResult {
         SUCCEEDED,
+        STALE_REJECTED,
+        DOCUMENT_NOT_FOUND,
+        ALREADY_CURRENT,
         EMBEDDING_FAILED,
         ELASTICSEARCH_UPDATE_FAILED
     }

@@ -176,6 +176,8 @@ class ContentSearchIndexerTest {
     void reindexAllBulkUpsertsEachPageAndRefreshesBeforeIdScan() {
         UUID firstContentId = UUID.randomUUID();
         UUID secondContentId = UUID.randomUUID();
+        String firstContentInputHash = "first-content-input-hash";
+        String secondContentInputHash = "second-content-input-hash";
         Content firstContent = createMockContent(
                 firstContentId,
                 "첫 번째 콘텐츠"
@@ -212,6 +214,14 @@ class ContentSearchIndexerTest {
         stubPageStatistics(List.of(firstContentId));
         stubPageStatistics(List.of(secondContentId));
         stubExistingIndexAndConversion();
+        when(contentEmbeddingService.calculateInputHash(
+                firstContent,
+                List.of()
+        )).thenReturn(firstContentInputHash);
+        when(contentEmbeddingService.calculateInputHash(
+                secondContent,
+                List.of()
+        )).thenReturn(secondContentInputHash);
 
         when(elasticsearchOperations.searchForStream(
                 any(Query.class),
@@ -270,19 +280,55 @@ class ContentSearchIndexerTest {
                     assertThat(updateQuery.getScript())
                             .contains(
                                     "ctx._source.get('embedding')",
+                                    "ctx._source.get('embeddingInputHash')",
+                                    "ctx._source.get('embeddingModel')",
                                     "ctx._source.clear()",
                                     "ctx._source.putAll(params.document)",
-                                    "ctx._source.put('embedding', embedding)"
+                                    "ctx._source.put('embedding', embedding)",
+                                    "ctx._source.put('embeddingInputHash', embeddingInputHash)",
+                                    "ctx._source.put('embeddingModel', embeddingModel)"
                             );
                     assertThat(updateQuery.getUpsert())
-                            .doesNotContainKey("embedding");
+                            .doesNotContainKeys(
+                                    "embedding",
+                                    "embeddingInputHash",
+                                    "embeddingModel"
+                            );
                     assertThat(updateQuery.getParams())
                             .containsKey("document");
                     assertThat(
                             (Document) updateQuery.getParams()
                                     .get("document")
-                    ).doesNotContainKey("embedding");
+                    ).doesNotContainKeys(
+                            "embedding",
+                            "embeddingInputHash",
+                            "embeddingModel"
+                    );
                 });
+
+        assertThat(updateQueries)
+                .extracting(updateQuery ->
+                        updateQuery.getUpsert().get("contentInputHash"))
+                .containsExactly(
+                        firstContentInputHash,
+                        secondContentInputHash
+                );
+
+        verify(contentEmbeddingService).calculateInputHash(
+                firstContent,
+                List.of()
+        );
+        verify(contentEmbeddingService).calculateInputHash(
+                secondContent,
+                List.of()
+        );
+        verify(contentEmbeddingService, never())
+                .embedContent(any(Content.class), anyList());
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(
+                        any(Content.class),
+                        anyList()
+                );
 
         assertThat(bulkOptionsCaptor.getAllValues())
                 .allSatisfy(options ->
@@ -761,8 +807,9 @@ class ContentSearchIndexerTest {
     }
 
     @Test
-    void indexUsesScriptedUpsertWhilePreservingEmbedding() {
+    void indexUpdatesContentHashWhilePreservingEmbeddingMetadata() {
         UUID contentId = UUID.randomUUID();
+        String contentInputHash = "latest-content-input-hash";
         Content content = mock(Content.class);
         ContentTag contentTag = mock(ContentTag.class);
         IndexCoordinates indexCoordinates =
@@ -806,6 +853,18 @@ class ContentSearchIndexerTest {
                 "embedding",
                 List.of(0.1F, 0.2F)
         );
+        convertedSource.put(
+                "embeddingInputHash",
+                "converter-embedding-input-hash"
+        );
+        convertedSource.put(
+                "embeddingModel",
+                "converter-embedding-model"
+        );
+        convertedSource.put(
+                "contentInputHash",
+                contentInputHash
+        );
 
         when(content.getId())
                 .thenReturn(contentId);
@@ -823,6 +882,10 @@ class ContentSearchIndexerTest {
 
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(List.of(contentTag));
+        when(contentEmbeddingService.calculateInputHash(
+                content,
+                List.of(contentTag)
+        )).thenReturn(contentInputHash);
 
         when(elasticsearchOperations.getElasticsearchConverter())
                 .thenReturn(elasticsearchConverter);
@@ -862,6 +925,12 @@ class ContentSearchIndexerTest {
 
         assertThat(sourceDocument.getEmbedding())
                 .isNull();
+        assertThat(sourceDocument.getContentInputHash())
+                .isEqualTo(contentInputHash);
+        assertThat(sourceDocument.getEmbeddingInputHash())
+                .isNull();
+        assertThat(sourceDocument.getEmbeddingModel())
+                .isNull();
 
         ArgumentCaptor<UpdateQuery> updateQueryCaptor =
                 ArgumentCaptor.forClass(UpdateQuery.class);
@@ -893,8 +962,16 @@ class ContentSearchIndexerTest {
                         "title",
                         "최신 제목"
                 )
+                .containsEntry(
+                        "contentInputHash",
+                        contentInputHash
+                )
                 .containsKey("tags")
-                .doesNotContainKey("embedding");
+                .doesNotContainKeys(
+                        "embedding",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                );
 
         assertThat(updateQuery.getParams())
                 .containsKey("document");
@@ -913,7 +990,15 @@ class ContentSearchIndexerTest {
                         "title",
                         "최신 제목"
                 )
-                .doesNotContainKey("embedding");
+                .containsEntry(
+                        "contentInputHash",
+                        contentInputHash
+                )
+                .doesNotContainKeys(
+                        "embedding",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                );
 
         assertThat(updateQuery.getScriptType())
                 .isEqualTo(ScriptType.INLINE);
@@ -921,9 +1006,16 @@ class ContentSearchIndexerTest {
         assertThat(updateQuery.getScript())
                 .contains(
                         "ctx._source.get('embedding')",
+                        "ctx._source.get('embeddingInputHash')",
+                        "ctx._source.get('embeddingModel')",
                         "ctx._source.clear()",
                         "ctx._source.putAll(params.document)",
-                        "ctx._source.put('embedding', embedding)"
+                        "ctx._source.put('embedding', embedding)",
+                        "ctx._source.put('embeddingInputHash', embeddingInputHash)",
+                        "ctx._source.put('embeddingModel', embeddingModel)",
+                        "if (embedding != null)",
+                        "if (embeddingInputHash != null)",
+                        "if (embeddingModel != null)"
                 );
 
         assertThat(updateQuery.getScriptedUpsert())
@@ -934,6 +1026,18 @@ class ContentSearchIndexerTest {
 
         assertThat(updateQuery.getRefreshPolicy())
                 .isEqualTo(RefreshPolicy.IMMEDIATE);
+
+        verify(contentEmbeddingService).calculateInputHash(
+                content,
+                List.of(contentTag)
+        );
+        verify(contentEmbeddingService, never())
+                .embedContent(any(Content.class), anyList());
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(
+                        any(Content.class),
+                        anyList()
+                );
 
         verify(contentSearchRepository, never())
                 .save(any(ContentSearchDocument.class));
@@ -993,7 +1097,10 @@ class ContentSearchIndexerTest {
                 .doesNotContainKeys(
                         "title",
                         "tags",
-                        "embedding"
+                        "contentInputHash",
+                        "embedding",
+                        "embeddingInputHash",
+                        "embeddingModel"
                 );
 
         assertThat(updateQuery.getUpsert())
@@ -1053,7 +1160,21 @@ class ContentSearchIndexerTest {
             ContentSearchDocument document = invocation.getArgument(0);
             Document source = Document.create();
             source.put("title", document.getTitle());
+            if (document.getContentInputHash() != null) {
+                source.put(
+                        "contentInputHash",
+                        document.getContentInputHash()
+                );
+            }
             source.put("embedding", List.of(0.1F, 0.2F));
+            source.put(
+                    "embeddingInputHash",
+                    "existing-embedding-input-hash"
+            );
+            source.put(
+                    "embeddingModel",
+                    "existing-embedding-model"
+            );
             return source;
         });
     }
