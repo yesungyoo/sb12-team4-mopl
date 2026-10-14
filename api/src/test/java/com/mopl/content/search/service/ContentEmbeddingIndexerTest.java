@@ -100,6 +100,12 @@ class ContentEmbeddingIndexerTest {
     @Mock
     private ContentSearchDocument document;
 
+    @Mock
+    private ContentSearchDocument backfillDocument;
+
+    @Mock
+    private SearchHit<ContentSearchDocument> backfillDocumentHit;
+
     private ContentEmbeddingIndexer contentEmbeddingIndexer;
 
     @BeforeEach
@@ -110,6 +116,31 @@ class ContentEmbeddingIndexerTest {
                 any(UpdateQuery.class),
                 any()
         )).thenReturn(UPDATED_RESPONSE);
+        lenient().when(aiProperties.embeddingModel())
+                .thenReturn(CURRENT_EMBEDDING_MODEL);
+        lenient().when(contentEmbeddingService.calculateInputHash(
+                any(Content.class),
+                anyList()
+        )).thenReturn(CURRENT_INPUT_HASH);
+        lenient().when(elasticsearchOperations.getIndexCoordinatesFor(
+                ContentSearchDocument.class
+        )).thenReturn(IndexCoordinates.of("contents"));
+        lenient().when(backfillDocument.getContentInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        lenient().when(backfillDocument.getEmbeddingInputHash())
+                .thenReturn("outdated-input-hash");
+        lenient().when(backfillDocument.getEmbeddingModel())
+                .thenReturn(CURRENT_EMBEDDING_MODEL);
+        lenient().when(backfillDocumentHit.getContent())
+                .thenReturn(backfillDocument);
+        lenient().when(elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        )).thenReturn(indexOperations);
+        lenient().when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(backfillDocumentHit);
     }
 
     @Test
@@ -595,12 +626,15 @@ class ContentEmbeddingIndexerTest {
                 queryCaptor.capture(),
                 eq(ContentSearchDocument.class)
         );
-        assertThat(queryCaptor.getValue().getQuery().bool().mustNot())
-                .singleElement()
-                .satisfies(mustNot -> assertThat(mustNot.exists().field())
-                        .isEqualTo("embedding"));
+        assertThat(queryCaptor.getValue().getQuery().matchAll())
+                .isNotNull();
         assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
-                .containsExactly("id");
+                .containsExactly(
+                        "id",
+                        "contentInputHash",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                );
         assertThat(queryCaptor.getValue().getSourceFilter().getExcludes())
                 .isEmpty();
         assertThat(queryCaptor.getValue().getPageable().getPageSize())
@@ -653,6 +687,261 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void backfillSkipsContentWithoutContentInputHash() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(backfillDocument.getContentInputHash()).thenReturn(null);
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isEqualTo(1L);
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillSkipsWhenDatabaseInputDiffersFromContentInputHash() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(contentEmbeddingService.calculateInputHash(
+                any(Content.class),
+                anyList()
+        )).thenReturn("different-database-input-hash");
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isEqualTo(1L);
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillRecalculatesWhenEmbeddingInputHashIsMissing() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(backfillDocument.getEmbeddingInputHash()).thenReturn(null);
+        when(contentEmbeddingService.embedContentWithMetadata(
+                any(Content.class),
+                anyList()
+        )).thenReturn(embeddingGeneration(List.of(0.1D)));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(1L);
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isZero();
+        verify(contentEmbeddingService)
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillRecalculatesWhenEmbeddingModelIsMissing() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(backfillDocument.getEmbeddingInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(backfillDocument.getEmbeddingModel()).thenReturn(null);
+        when(contentEmbeddingService.embedContentWithMetadata(
+                any(Content.class),
+                anyList()
+        )).thenReturn(embeddingGeneration(List.of(0.1D)));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(1L);
+        assertThat(result.failed()).isZero();
+        verify(contentEmbeddingService)
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillRecalculatesWhenEmbeddingModelIsOutdated() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(backfillDocument.getEmbeddingInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(backfillDocument.getEmbeddingModel())
+                .thenReturn("old-embedding-model");
+        when(contentEmbeddingService.embedContentWithMetadata(
+                any(Content.class),
+                anyList()
+        )).thenReturn(embeddingGeneration(List.of(0.1D)));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(1L);
+        assertThat(result.failed()).isZero();
+        verify(contentEmbeddingService)
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillSkipsWhenEmbeddingBecameCurrentBeforeProcessing() {
+        enableAi();
+        UUID contentId = UUID.randomUUID();
+        BackfillFixture fixture = createBackfillFixture(List.of(contentId));
+        ContentSearchDocument currentDocument =
+                mock(ContentSearchDocument.class);
+        SearchHit<ContentSearchDocument> currentDocumentHit =
+                mock(SearchHit.class);
+        when(currentDocument.getContentInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(currentDocument.getEmbeddingInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(currentDocument.getEmbeddingModel())
+                .thenReturn(CURRENT_EMBEDDING_MODEL);
+        when(currentDocumentHit.getContent()).thenReturn(currentDocument);
+        when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(currentDocumentHit);
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isEqualTo(1L);
+        verify(contentRepository)
+                .findAllByIdInAndDeletedAtIsNull(List.of(contentId));
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillFindsMissingEmbeddingWithoutFetchingVectorSource() {
+        enableAi();
+        UUID contentId = UUID.randomUUID();
+        SearchHitsIterator<ContentSearchDocument> missingEmbeddingHits =
+                createSearchHitsIterator(List.of(contentId));
+        BackfillFixture fixture = createBackfillFixture(
+                List.of(contentId),
+                missingEmbeddingHits
+        );
+        when(backfillDocument.getEmbeddingInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(backfillDocumentHit).thenReturn(null);
+        when(contentEmbeddingService.embedContentWithMetadata(
+                any(Content.class),
+                anyList()
+        )).thenReturn(embeddingGeneration(List.of(0.1D)));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isEqualTo(1L);
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isZero();
+        verify(elasticsearchOperations, times(2))
+                .searchForStream(
+                        any(NativeQuery.class),
+                        eq(ContentSearchDocument.class)
+                );
+        verify(contentEmbeddingService)
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+        verify(missingEmbeddingHits).close();
+    }
+
+    @Test
+    void backfillSkipsWhenElasticsearchDocumentWasDeleted() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(null);
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isZero();
+        assertThat(result.skipped()).isEqualTo(1L);
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillCountsLatestMetadataReadFailureAsElasticsearchFailure() {
+        enableAi();
+        BackfillFixture fixture = createBackfillFixture(1);
+        when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenThrow(new RuntimeException("Elasticsearch unavailable"));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(1L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason.NONE);
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillRecoversFailedEmbeddingOnTheNextRun() {
+        enableAi();
+        UUID contentId = UUID.randomUUID();
+        BackfillFixture firstFixture = createBackfillFixture(List.of(contentId));
+        SearchHitsIterator<ContentSearchDocument> secondRunHits =
+                createSearchHitsIterator(List.of(contentId));
+        when(elasticsearchOperations.searchForStream(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class)
+        )).thenReturn(firstFixture.searchHits(), secondRunHits);
+        AtomicInteger calls = new AtomicInteger();
+        when(contentEmbeddingService.embedContentWithMetadata(
+                any(Content.class),
+                anyList()
+        )).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new RuntimeException("OpenAI unavailable");
+            }
+            return embeddingGeneration(List.of(0.1D));
+        });
+
+        ContentEmbeddingIndexer.BackfillResult firstResult =
+                contentEmbeddingIndexer.backfillMissing();
+        ContentEmbeddingIndexer.BackfillResult secondResult =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(firstResult.failed()).isEqualTo(1L);
+        assertThat(secondResult.succeeded()).isEqualTo(1L);
+        assertThat(calls).hasValue(2);
+        verify(firstFixture.searchHits()).close();
+        verify(secondRunHits).close();
+    }
+
+    @Test
     void backfillMissingProcessesMoreThanOneSearchBatchWithoutRepeatingHits() {
         enableAi();
 
@@ -668,7 +957,7 @@ class ContentEmbeddingIndexerTest {
         SearchHitsIterator<ContentSearchDocument> searchHits =
                 createSearchHitsIterator(contentIds);
 
-        when(elasticsearchOperations.searchForStream(
+        lenient().when(elasticsearchOperations.searchForStream(
                 any(NativeQuery.class),
                 eq(ContentSearchDocument.class)
         )).thenReturn(searchHits);
@@ -1373,6 +1662,14 @@ class ContentEmbeddingIndexerTest {
         List<UUID> contentIds = IntStream.range(0, count)
                 .mapToObj(ignored -> UUID.randomUUID())
                 .toList();
+        return createBackfillFixture(contentIds);
+    }
+
+    @SafeVarargs
+    private final BackfillFixture createBackfillFixture(
+            List<UUID> contentIds,
+            SearchHitsIterator<ContentSearchDocument>... additionalSearchHits
+    ) {
         Map<UUID, Content> contentsById = new HashMap<>();
         contentIds.forEach(contentId -> {
             Content indexedContent = new Content(
@@ -1393,10 +1690,10 @@ class ContentEmbeddingIndexerTest {
 
         SearchHitsIterator<ContentSearchDocument> searchHits =
                 createSearchHitsIterator(contentIds);
-        when(elasticsearchOperations.searchForStream(
+        lenient().when(elasticsearchOperations.searchForStream(
                 any(NativeQuery.class),
                 eq(ContentSearchDocument.class)
-        )).thenReturn(searchHits);
+        )).thenReturn(searchHits, additionalSearchHits);
         when(contentRepository.findAllByIdInAndDeletedAtIsNull(anyList()))
                 .thenAnswer(invocation -> {
                     List<UUID> batchIds = invocation.getArgument(0);
@@ -1495,15 +1792,16 @@ class ContentEmbeddingIndexerTest {
                 .map(documentId -> {
                     SearchHit<ContentSearchDocument> hit =
                             mock(SearchHit.class);
-                    when(hit.getId()).thenReturn(documentId);
+                    lenient().when(hit.getId()).thenReturn(documentId);
+                    lenient().when(hit.getContent()).thenReturn(backfillDocument);
                     return hit;
                 })
                 .toList();
         AtomicInteger position = new AtomicInteger();
 
-        when(searchHits.hasNext())
+        lenient().when(searchHits.hasNext())
                 .thenAnswer(invocation -> position.get() < hits.size());
-        when(searchHits.next())
+        lenient().when(searchHits.next())
                 .thenAnswer(invocation -> hits.get(position.getAndIncrement()));
 
         return searchHits;

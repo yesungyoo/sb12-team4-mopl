@@ -165,7 +165,19 @@ public class ContentEmbeddingIndexer {
 
         return embedding == null
                 || embedding.isEmpty()
-                || !Objects.equals(
+                || requiresEmbeddingMetadataRecalculation(
+                        document,
+                        currentInputHash,
+                        currentModel
+                );
+    }
+
+    private boolean requiresEmbeddingMetadataRecalculation(
+            ContentSearchDocument document,
+            String currentInputHash,
+            String currentModel
+    ) {
+        return !Objects.equals(
                         document.getEmbeddingInputHash(),
                         currentInputHash
                 )
@@ -199,12 +211,15 @@ public class ContentEmbeddingIndexer {
         }
 
         BackfillCounts counts = new BackfillCounts();
-        LinkedHashSet<UUID> uniqueContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> candidateContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> currentMetadataContentIds = new LinkedHashSet<>();
+        LinkedHashSet<UUID> seenContentIds = new LinkedHashSet<>();
+        String currentModel = aiProperties.embeddingModel();
 
         try {
             try (SearchHitsIterator<ContentSearchDocument> searchHits =
                          elasticsearchOperations.searchForStream(
-                                 buildMissingEmbeddingQuery(),
+                                 buildEmbeddingMetadataScanQuery(),
                                  ContentSearchDocument.class
                          )) {
                 while (searchHits.hasNext()) {
@@ -212,12 +227,34 @@ public class ContentEmbeddingIndexer {
                             searchHits.next();
                     try {
                         UUID contentId = UUID.fromString(searchHit.getId());
-                        if (!uniqueContentIds.add(contentId)) {
+                        if (!seenContentIds.add(contentId)) {
                             counts.skipped++;
                             log.warn(
                                     "embedding Backfill 검색 결과에 중복 문서 ID가 있어 건너뜁니다. contentId={}",
                                     contentId
                             );
+                            continue;
+                        }
+
+                        ContentSearchDocument document = searchHit.getContent();
+                        String indexedInputHash = document.getContentInputHash();
+                        if (!StringUtils.hasText(indexedInputHash)
+                                || requiresEmbeddingMetadataRecalculation(
+                                        document,
+                                        indexedInputHash,
+                                        currentModel
+                                )) {
+                            candidateContentIds.add(contentId);
+                        } else {
+                            currentMetadataContentIds.add(contentId);
+                            if (currentMetadataContentIds.size() == BATCH_SIZE) {
+                                collectMissingEmbeddingIds(
+                                        new ArrayList<>(currentMetadataContentIds),
+                                        candidateContentIds,
+                                        counts
+                                );
+                                currentMetadataContentIds.clear();
+                            }
                         }
                     } catch (IllegalArgumentException exception) {
                         counts.skipped++;
@@ -228,6 +265,11 @@ public class ContentEmbeddingIndexer {
                     }
                 }
             }
+            collectMissingEmbeddingIds(
+                    new ArrayList<>(currentMetadataContentIds),
+                    candidateContentIds,
+                    counts
+            );
         } catch (RuntimeException exception) {
             log.error(
                     "콘텐츠 Embedding Backfill 실패. 단계=ES 스트림 조회, 성공={}, 실패={}, 건너뜀={}",
@@ -244,7 +286,7 @@ public class ContentEmbeddingIndexer {
             );
         }
 
-        List<UUID> contentIds = new ArrayList<>(uniqueContentIds);
+        List<UUID> contentIds = new ArrayList<>(candidateContentIds);
         counts.totalTargets = contentIds.size();
         try {
             for (int start = 0; start < contentIds.size(); start += BATCH_SIZE) {
@@ -313,22 +355,117 @@ public class ContentEmbeddingIndexer {
         );
     }
 
-    private NativeQuery buildMissingEmbeddingQuery() {
+    private NativeQuery buildEmbeddingMetadataScanQuery() {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.matchAll(matchAll -> matchAll))
+                // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
+                .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
+                .build();
+
+        addEmbeddingMetadataSourceFilter(query);
+        return query;
+    }
+
+    private NativeQuery buildMissingEmbeddingByIdsQuery(
+            List<UUID> contentIds
+    ) {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
+                        .must(must -> must.ids(ids -> ids.values(
+                                contentIds.stream()
+                                        .map(UUID::toString)
+                                        .toList()
+                        )))
                         .mustNot(mustNot -> mustNot.exists(exists -> exists
                                 .field("embedding")
                         ))
                 ))
-                // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
                 .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
                 .build();
 
         query.addSourceFilter(FetchSourceFilter.of(
                 builder -> builder.withIncludes("id")
         ));
-
         return query;
+    }
+
+    private NativeQuery buildDocumentMetadataQuery(UUID contentId) {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.ids(ids -> ids.values(
+                        List.of(contentId.toString())
+                )))
+                .build();
+
+        addEmbeddingMetadataSourceFilter(query);
+        return query;
+    }
+
+    private NativeQuery buildDocumentEmbeddingExistsQuery(UUID contentId) {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
+                        .must(must -> must.ids(ids -> ids.values(
+                                List.of(contentId.toString())
+                        )))
+                        .must(must -> must.exists(exists -> exists
+                                .field("embedding")
+                        ))
+                ))
+                .build();
+
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes("id")
+        ));
+        return query;
+    }
+
+    private void addEmbeddingMetadataSourceFilter(NativeQuery query) {
+        query.addSourceFilter(FetchSourceFilter.of(
+                builder -> builder.withIncludes(
+                        "id",
+                        "contentInputHash",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                )
+        ));
+    }
+
+    private void collectMissingEmbeddingIds(
+            List<UUID> contentIds,
+            LinkedHashSet<UUID> candidateContentIds,
+            BackfillCounts counts
+    ) {
+        if (contentIds.isEmpty()) {
+            return;
+        }
+
+        LinkedHashSet<String> seenDocumentIds = new LinkedHashSet<>();
+        try (SearchHitsIterator<ContentSearchDocument> searchHits =
+                     elasticsearchOperations.searchForStream(
+                             buildMissingEmbeddingByIdsQuery(contentIds),
+                             ContentSearchDocument.class
+                     )) {
+            while (searchHits.hasNext()) {
+                SearchHit<ContentSearchDocument> searchHit = searchHits.next();
+                String documentId = searchHit.getId();
+                try {
+                    UUID contentId = UUID.fromString(documentId);
+                    if (!seenDocumentIds.add(documentId)) {
+                        log.warn(
+                                "embedding Backfill 검색 결과에 중복 문서 ID가 있어 건너뜁니다. contentId={}",
+                                contentId
+                        );
+                        continue;
+                    }
+                    candidateContentIds.add(contentId);
+                } catch (IllegalArgumentException exception) {
+                    counts.skipped++;
+                    log.warn(
+                            "embedding Backfill 검색 결과의 문서 ID가 UUID 형식이 아니어서 건너뜁니다. documentId={}",
+                            documentId
+                    );
+                }
+            }
+        }
     }
 
     private boolean processBatch(
@@ -358,7 +495,7 @@ public class ContentEmbeddingIndexer {
 
             EmbeddingUpdateResult result;
             try {
-                result = embedAndUpdate(
+                result = embedIfNeeded(
                         content,
                         contentTags,
                         RefreshPolicy.NONE
@@ -391,7 +528,8 @@ public class ContentEmbeddingIndexer {
                 counts.consecutiveFailures = 0;
                 counts.consecutiveElasticsearchFailures = 0;
             } else if (result == EmbeddingUpdateResult.STALE_REJECTED
-                    || result == EmbeddingUpdateResult.DOCUMENT_NOT_FOUND) {
+                    || result == EmbeddingUpdateResult.DOCUMENT_NOT_FOUND
+                    || result == EmbeddingUpdateResult.ALREADY_CURRENT) {
                 counts.skipped++;
                 counts.consecutiveFailures = 0;
                 counts.consecutiveElasticsearchFailures = 0;
@@ -433,6 +571,105 @@ public class ContentEmbeddingIndexer {
         }
 
         return false;
+    }
+
+    private EmbeddingUpdateResult embedIfNeeded(
+            Content content,
+            List<ContentTag> contentTags,
+            RefreshPolicy refreshPolicy
+    ) {
+        UUID contentId = content.getId();
+        String currentInputHash;
+        SearchHit<ContentSearchDocument> documentHit;
+        try {
+            currentInputHash = contentEmbeddingService.calculateInputHash(
+                    content,
+                    contentTags
+            );
+            documentHit = elasticsearchOperations.searchOne(
+                    buildDocumentMetadataQuery(contentId),
+                    ContentSearchDocument.class,
+                    elasticsearchOperations.getIndexCoordinatesFor(
+                            ContentSearchDocument.class
+                    )
+            );
+        } catch (ResourceNotFoundException exception) {
+            log.warn(
+                    "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "embedding Backfill 최신 상태 확인에 실패했습니다. contentId={}",
+                    contentId,
+                    exception
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+
+        if (documentHit == null) {
+            log.warn(
+                    "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
+        }
+
+        ContentSearchDocument document = documentHit.getContent();
+        String indexedInputHash = document.getContentInputHash();
+        if (!StringUtils.hasText(indexedInputHash)) {
+            log.warn(
+                    "contentInputHash가 없어 일반 SYNC_DATA가 필요하므로 embedding Backfill을 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.STALE_REJECTED;
+        }
+        if (!Objects.equals(indexedInputHash, currentInputHash)) {
+            log.warn(
+                    "Elasticsearch contentInputHash가 현재 DB 입력과 달라 embedding Backfill을 건너뜁니다. contentId={}, contentInputHash={}, currentInputHash={}",
+                    contentId,
+                    indexedInputHash,
+                    currentInputHash
+            );
+            return EmbeddingUpdateResult.STALE_REJECTED;
+        }
+
+        String currentModel = aiProperties.embeddingModel();
+        boolean hasEmbedding;
+        try {
+            hasEmbedding = !requiresEmbeddingMetadataRecalculation(
+                    document,
+                    currentInputHash,
+                    currentModel
+            ) && hasEmbedding(contentId);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "embedding Backfill 최신 벡터 상태 확인에 실패했습니다. contentId={}",
+                    contentId,
+                    exception
+            );
+            return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
+        }
+        if (hasEmbedding) {
+            log.debug(
+                    "embedding이 이미 최신 상태여서 Backfill을 건너뜁니다. contentId={}",
+                    contentId
+            );
+            return EmbeddingUpdateResult.ALREADY_CURRENT;
+        }
+
+        return embedAndUpdate(content, contentTags, refreshPolicy);
+    }
+
+    private boolean hasEmbedding(UUID contentId) {
+        return elasticsearchOperations.searchOne(
+                buildDocumentEmbeddingExistsQuery(contentId),
+                ContentSearchDocument.class,
+                elasticsearchOperations.getIndexCoordinatesFor(
+                        ContentSearchDocument.class
+                )
+        ) != null;
     }
 
     private EmbeddingUpdateResult embedAndUpdate(
@@ -623,6 +860,7 @@ public class ContentEmbeddingIndexer {
         SUCCEEDED,
         STALE_REJECTED,
         DOCUMENT_NOT_FOUND,
+        ALREADY_CURRENT,
         EMBEDDING_FAILED,
         ELASTICSEARCH_UPDATE_FAILED
     }
