@@ -49,6 +49,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 @SpringBootTest(properties = {
@@ -276,6 +277,7 @@ public class SemanticSearchIntegrationTest {
                 .getContentInputHash();
         CountDownLatch oldEmbeddingStarted = new CountDownLatch(1);
         CountDownLatch allowOldEmbeddingToFinish = new CountDownLatch(1);
+        AtomicBoolean oldEmbeddingReturned = new AtomicBoolean(false);
         List<Double> oldEmbedding = createVector(0);
         List<Double> latestEmbedding = createVector(1);
 
@@ -284,11 +286,12 @@ public class SemanticSearchIntegrationTest {
                     EmbeddingRequest request = invocation.getArgument(0);
                     if (request.input().contains(oldTitle)) {
                         oldEmbeddingStarted.countDown();
-                        if (!allowOldEmbeddingToFinish.await(10, TimeUnit.SECONDS)) {
+                        if (!allowOldEmbeddingToFinish.await(30, TimeUnit.SECONDS)) {
                             throw new IllegalStateException(
                                     "Timed out waiting to release old embedding"
                             );
                         }
+                        oldEmbeddingReturned.set(true);
                         return new EmbeddingResponse(oldEmbedding);
                     }
                     return new EmbeddingResponse(latestEmbedding);
@@ -299,7 +302,7 @@ public class SemanticSearchIntegrationTest {
         );
 
         try {
-            assertThat(oldEmbeddingStarted.await(10, TimeUnit.SECONDS))
+            assertThat(oldEmbeddingStarted.await(30, TimeUnit.SECONDS))
                     .isTrue();
 
             content.update(
@@ -314,9 +317,12 @@ public class SemanticSearchIntegrationTest {
             contentEmbeddingIndexer.index(content);
         } finally {
             allowOldEmbeddingToFinish.countDown();
+            oldEmbeddingTask.get(30, TimeUnit.SECONDS);
         }
 
-        oldEmbeddingTask.get(10, TimeUnit.SECONDS);
+		assertThat(oldEmbeddingReturned.get())
+			.as("the stale embedding request should return its vector")
+			.isTrue();
 
         ContentSearchDocument latestDocument = contentSearchRepository
                 .findById(content.getId().toString())

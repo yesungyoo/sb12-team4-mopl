@@ -30,7 +30,7 @@ GET /contents/_mapping
 
 실제 이름이 `contents`와 다르거나 alias를 사용하는 환경에서는 실제 대상 인덱스를 확인해 요청을 조정합니다. 필드가 이미 존재하면 타입이 `keyword`인지 확인하세요. 타입 충돌이 있다면 기존 필드 매핑을 강제로 변경하지 말고 별도 인덱스를 생성해 재색인한 뒤 alias를 전환하는 절차를 사용합니다. mapping 변경은 기존 문서의 hash나 모델 메타데이터를 채우지 않으므로 이후 `SYNC_DATA`와 Backfill이 필요합니다.
 
-Backfill은 `embedding` 누락뿐 아니라 `embeddingInputHash` 또는 `embeddingModel`이 없거나 현재 입력 hash·설정 모델과 불일치하는 문서도 재생성 대상으로 찾습니다. 따라서 기존 문서에 embedding 벡터가 있어도 생성 메타데이터가 없는 legacy 문서는 다시 OpenAI API를 호출할 수 있습니다. 최초 실행 전에 대상 콘텐츠 건수, 입력 텍스트의 예상 토큰 사용량, 사용할 embedding 모델을 바탕으로 예상 요청량과 비용을 사전 산정하고 승인받으세요. 실제 비용은 데이터와 모델, 실제 토큰 사용량에 따라 달라지므로 여기서 금액을 단정하지 않습니다.
+Backfill은 `embedding` 누락뿐 아니라 `embeddingInputHash` 또는 `embeddingModel`이 없거나 현재 입력 hash·설정 모델과 불일치하는 문서도 재생성 대상으로 찾습니다. 따라서 기존 문서에 embedding 벡터가 있어도 생성 메타데이터가 없는 legacy 문서는 다시 OpenAI API를 호출할 수 있습니다. 기존 embedding이 메타데이터 없이 저장된 환경에서는 최초 Backfill이 대량의 OpenAI 요청과 비용을 발생시킬 수 있습니다. 최초 실행 전에 실제 콘텐츠 건수, 사용할 모델, 예상 토큰 사용량을 기준으로 요청량과 비용을 사전 산정하세요. 실제 비용은 데이터와 모델, 실제 토큰 사용량에 따라 달라지므로 확인되지 않은 금액을 전제하지 않습니다.
 
 ## 운영 실행 정책
 
@@ -39,7 +39,7 @@ Backfill은 `embedding` 누락뿐 아니라 `embeddingInputHash` 또는 `embeddi
 - 서비스 영향을 최소화하기 위해 트래픽이 적은 유지보수 구간에 실행하는 것을 권장합니다.
 - 동일한 Elasticsearch 인덱스를 대상으로 하는 `SYNC_DATA`와 `EMBEDDING_BACKFILL`을 동시에 실행하지 않습니다.
 - 콘텐츠 수집 Batch와 실행 시간이 겹치지 않도록 조정하고, Kafka Consumer의 검색 인덱스 갱신과 충돌하지 않도록 운영 구간을 관리합니다.
-- 모델 설정을 바꾸는 배포에서는 기존 설정을 사용하는 모든 embedding writer와 진행 중인 embedding 작업을 먼저 중지·완료시킨 뒤 새 설정 작업자를 실행합니다. 이후 `SYNC_DATA`를 먼저 실행하고 `EMBEDDING_BACKFILL`을 실행합니다. 구·신 모델 writer를 동시에 실행하지 마세요.
+- #12 최초 배포와 모델 변경 배포 모두 구버전 writer가 남지 않도록 합니다. 모든 API pod을 #12 이후 코드로 교체하고 구버전 Kafka consumer 및 embedding writer와 진행 중인 작업이 모두 종료된 것을 확인한 뒤 동기화 작업을 실행합니다. 구버전 색인·embedding writer는 신규 메타데이터를 지우거나 지연된 이전 embedding으로 최신 결과를 덮어쓸 수 있습니다. `SYNC_DATA`와 `EMBEDDING_BACKFILL` 모두 #12 이후 코드로 빌드한 CLI JAR를 사용해야 합니다. 특히 구버전 CLI JAR의 `SYNC_DATA`는 신규 embedding 메타데이터를 지울 위험이 있습니다. 실행 순서는 `SYNC_DATA` 완료 후 `EMBEDDING_BACKFILL`입니다. 모델 교체 때도 구·신 모델 writer를 동시에 실행하지 마세요.
 - 실행 전 MySQL과 Elasticsearch의 연결 상태 및 DB 스키마를 확인합니다.
 - 실행 후 종료 코드와 로그를 확인하고 주요 콘텐츠의 검색 결과를 검증합니다.
 
@@ -103,7 +103,7 @@ Embedding 모드는 같은 JAR 명령에서 모드만 바꾸고 `MOPL_AI_ENABLED
 
 | 코드 | 의미 | 대응 |
 | --- | --- | --- |
-| `0` | 선택한 작업이 실패 또는 미처리 없이 끝남 | Backfill의 `skipped`에는 처리 시점의 hash 불일치로 조건부 저장이 거부된 `STALE_REJECTED`도 포함될 수 있습니다. 따라서 종료 코드 `0`만으로 전체 문서의 embedding 정합성을 단정하지 말고 로그의 성공·실패·건너뜀·미처리 수와 stale 경고를 확인하세요. |
+| `0` | 선택한 작업이 실패 또는 미처리 없이 끝남 | Backfill의 `skipped`에는 `STALE_REJECTED`뿐 아니라 이미 최신인 문서, Elasticsearch 문서 없음, MySQL에서 찾을 수 없거나 삭제된 콘텐츠 등이 포함됩니다. `STALE_REJECTED`는 OpenAI 호출 전 hash 확인 단계와 생성 후 조건부 저장 단계 모두에서 발생할 수 있습니다. 따라서 종료 코드 `0`만으로 전체 문서의 embedding 정합성을 단정하지 말고 실행 요약과 실제 stale 로그를 확인하세요. |
 | `1` | Embedding Backfill에서 한 건 이상 실패·미처리가 발생했거나 조기 중단됨 | 실행 로그의 성공·실패·건너뜀·미처리 수와 중단 사유를 확인합니다. OpenAI 401/403이면 Key와 권한을 수정하고, 연속 실패 중단이면 장애 원인을 해결한 뒤 다시 실행합니다. |
 | `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA` 또는 `EMBEDDING_BACKFILL`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. |
 | `3` | 위 설정 오류 이외의 기동 실패, DB 연결·Hibernate 스키마 검증 실패 또는 작업 전체로 전파된 DB·Elasticsearch 처리 예외 | 환경 변수의 값 형식, DB 스키마와 인프라 상태 및 원인 예외를 확인하고 복구한 뒤 같은 모드로 재실행합니다. |
@@ -207,18 +207,19 @@ exit "$cli_exit_code"
 
 ## AI 최초 활성화 절차
 
-AI 검색 기능을 처음 활성화할 때는 기존 검색 인덱스의 매핑을 확인하고, 일반 검색 데이터 동기화와 Embedding 생성을 분리하여 진행합니다. 모델 변경이라면 구 설정 writer와 진행 중인 작업이 모두 종료된 것을 확인한 후 아래 순서를 따릅니다.
+AI 검색 기능을 처음 활성화할 때는 기존 검색 인덱스의 매핑을 확인하고, 일반 검색 데이터 동기화와 Embedding 생성을 분리하여 진행합니다. #12 최초 배포에서는 모든 API pod이 새 코드로 교체되고 구버전 Kafka consumer, embedding writer 및 진행 중 작업이 종료된 뒤 아래 순서를 따릅니다. 두 CLI 작업 모두 #12 이후 코드로 빌드한 동일한 릴리스 계열의 JAR를 사용하세요. 구버전 `SYNC_DATA`는 신규 메타데이터를 지울 수 있습니다.
 
 1. 실제 인덱스 또는 alias 대상과 mapping을 확인하고 세 keyword 필드를 적용합니다.
 2. MySQL과 Elasticsearch 연결 상태 및 DB 스키마를 확인하고 유지보수 구간을 확보합니다.
-3. 모델 변경 배포라면 이전 설정을 사용하는 Kafka embedding writer, Backfill 프로세스 등 모든 writer를 중지하고 진행 중인 작업이 끝날 때까지 기다립니다.
-4. `SYNC_DATA`를 실행해 일반 검색 문서와 최신 `contentInputHash`를 반영하고 검색 결과를 검증합니다.
+3. 구버전 API pod, Kafka consumer, embedding writer와 진행 중인 작업이 없음을 확인합니다. 모델 변경 배포에서도 이전 설정 writer를 먼저 중단·완료시킵니다.
+4. #12 이후 코드로 빌드한 CLI JAR를 사용해 `SYNC_DATA`를 완료하고 일반 검색 문서와 최신 `contentInputHash`를 반영한 뒤 검색 결과를 검증합니다.
 5. `MOPL_AI_ENABLED=true`와 유효한 `OPENAI_API_KEY`를 준비하고 Backfill 대상 건수·예상 토큰량·모델에 따른 예상 비용을 사전 검토합니다.
-6. `EMBEDDING_BACKFILL`을 실행합니다. 누락뿐 아니라 hash·모델 metadata 누락 또는 불일치 문서도 처리합니다.
+6. 같은 #12 이후 CLI JAR로 `EMBEDDING_BACKFILL`을 실행합니다. 누락뿐 아니라 hash·모델 메타데이터 누락 또는 불일치 문서도 처리합니다.
 7. 종료 코드와 성공·실패·건너뜀·미처리 건수, 특히 stale 경고를 확인합니다. 종료 코드 `0`만으로 정합성을 단정하지 않습니다.
 8. 실패 또는 미처리가 있다면 원인을 해결하고 `EMBEDDING_BACKFILL`을 재실행합니다.
 9. Backfill 결과와 Semantic Search·추천 동작을 검증한 후 운영 API의 AI 기능을 활성화합니다.
-10. 이후 새로 색인된 문서는 Kafka embedding 경로에서 처리되며, 필요 시 동일한 점검 절차로 Backfill을 재실행합니다.
+10. 첫 Backfill 완료 후 AI 활성화 전까지 새 콘텐츠가 유입되면 embedding이 없을 수 있으므로, AI를 활성화한 뒤 `EMBEDDING_BACKFILL`을 한 번 더 실행해 간격 중 유입된 문서를 처리합니다. 이미 입력 hash와 모델이 최신인 embedding은 재생성하지 않습니다.
+11. 이후 새로 색인된 문서는 Kafka embedding 경로에서 처리되며, 필요 시 동일한 점검 절차로 Backfill을 재실행합니다.
 
 `SYNC_DATA`는 기존 embedding과 생성 metadata를 보존합니다. `EMBEDDING_BACKFILL`은 입력 hash와 모델이 현재 상태인 embedding은 다시 생성하지 않지만, 기존 벡터의 metadata가 없거나 stale이면 재생성합니다.
 
@@ -226,9 +227,10 @@ AI 검색 기능을 사용자에게 공개하는 시점은 Backfill 처리 결�
 
 ## Backfill 재실행과 처리 특성
 
-- Backfill은 `embedding`이 없는 문서뿐 아니라 `embeddingInputHash` 또는 `embeddingModel`이 누락되거나 `contentInputHash`·현재 모델과 불일치하는 문서도 찾습니다. hash와 모델이 모두 최신인 기존 embedding은 재호출하지 않습니다.
-- `contentInputHash`가 없거나 DB 입력 hash와 다르면 OpenAI를 호출하지 않고 건너뜁니다. 일반 색인 동기화가 선행되도록 `SYNC_DATA`를 실행한 뒤 Backfill을 다시 확인합니다.
-- 검색 Scroll을 닫은 뒤 조회된 전체 고유 UUID를 메모리에 수집하고, 이후 MySQL의 활성 콘텐츠 및 태그를 500개 단위로 조회합니다. 따라서 현재 방식은 전체 누락 UUID 수에 비례해 메모리를 사용합니다. 데이터 규모가 크게 늘면 영속 체크포인트 또는 페이지 기반 설계를 별도 검토해야 합니다.
+- Backfill은 `embedding`이 없는 문서뿐 아니라 `embeddingInputHash` 또는 `embeddingModel`이 누락되거나 `contentInputHash`와 embedding 입력 hash 또는 현재 모델이 불일치하는 문서도 찾습니다. hash와 모델이 모두 최신인 기존 embedding은 재호출하지 않습니다.
+- `contentInputHash`가 없거나 DB 입력 hash와 다르면 OpenAI를 호출하지 않고 `STALE_REJECTED`로 건너뜁니다. 같은 결과는 embedding 생성 중 입력이 바뀌어 조건부 저장이 거부된 경우에도 발생합니다. 실제 로그 문구는 각각 `contentInputHash가 없어 일반 SYNC_DATA가 필요하므로 embedding Backfill을 건너뜁니다.`, `Elasticsearch contentInputHash가 현재 DB 입력과 달라 embedding Backfill을 건너뜁니다.`, `최신 contentInputHash와 생성 당시 hash가 일치하지 않아 stale embedding 업데이트를 거부했습니다.`입니다. 일반 색인 동기화가 필요한 경우 `SYNC_DATA` 완료 후 Backfill을 다시 확인합니다.
+- Backfill 요약의 `skipped`에는 stale 거부뿐 아니라 이미 최신인 embedding, Elasticsearch 문서 없음, MySQL에서 찾을 수 없거나 soft-delete된 콘텐츠도 포함됩니다. 관련 로그 예시는 `embedding이 이미 최신 상태여서 Backfill을 건너뜁니다.`, `embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다.`, `콘텐츠 Embedding 저장 전에 Elasticsearch 문서가 삭제되어 건너뜁니다.`입니다. DB에서 누락되거나 삭제된 콘텐츠는 batch 조회 결과의 수 차이로 집계되며 개별 로그가 항상 출력되는 것은 아닙니다.
+- 검색 Scroll을 닫은 뒤 전체 스캔에서 확인한 고유 UUID를 메모리에 수집하고, 이후 MySQL의 활성 콘텐츠 및 태그를 500개 단위로 조회합니다. 따라서 메모리 사용량은 누락 UUID 수만이 아니라 전체 스캔 문서 ID 수에 영향을 받습니다. 데이터 규모가 크게 늘면 영속 체크포인트 또는 페이지 기반 설계를 별도 검토해야 합니다.
 - MySQL에서 찾을 수 없거나 `deletedAt`이 설정된 콘텐츠는 건너뜁니다. Backfill은 일반 검색 문서를 새로 만들지 않습니다.
 - OpenAI 인증 오류 401/403은 즉시 중단합니다. 다른 OpenAI 실패와 Elasticsearch 저장 실패는 서로 분리된 연속 실패 임계치를 사용합니다. 해당 임계치에 도달하면 남은 문서는 미처리로 기록되고 종료 코드 `1`이 반환됩니다.
 - 일부 성공 후 실패해도 성공한 Embedding은 보존됩니다. 원인을 해결한 후 같은 Backfill 명령을 다시 실행하면 이미 저장된 Embedding은 제외되고 누락된 문서부터 이어서 처리합니다. 복잡한 재시도 큐나 별도 체크포인트는 사용하지 않습니다.
@@ -238,4 +240,6 @@ AI 검색 기능을 사용자에게 공개하는 시점은 Backfill 처리 결�
 
 모델명은 실제 embedding 생성 모델을 식별하지만, 서로 다른 버전 writer의 선후 관계를 코드에서 판정하는 epoch/fencing은 구현되어 있지 않습니다. 모델을 교체할 때는 구 설정의 API/Kafka writer와 실행 중인 Backfill을 모두 중지하고, in-flight 작업이 완료된 것을 확인한 뒤 새 설정으로 전환합니다. 새 writer에서 `SYNC_DATA`를 실행하고 이어 `EMBEDDING_BACKFILL`을 실행하세요. 구·신 설정 writer가 겹치면 늦게 끝난 구 모델 결과가 새 결과를 덮어쓸 수 있습니다.
 
-현재 `contents`의 dense vector 차원은 애플리케이션 mapping에 고정되어 있습니다. 교체 모델의 vector 차원이 다르면 기존 mapping을 변경해 재사용하지 말고, 올바른 차원의 새 인덱스를 생성해 전체 재색인 및 embedding Backfill을 수행한 뒤 검색 대상 alias를 전환해야 합니다.
+현재 검색 문서의 인덱스명 `contents`와 dense vector 1536차원은 애플리케이션 코드와 mapping에 고정되어 있습니다. 다른 차원의 모델을 사용하려면 코드의 인덱스 설정 및 vector mapping을 바꾸고, 그에 맞는 새 인덱스 생성·전체 재색인·embedding Backfill·검색 대상 전환을 먼저 준비해야 합니다. 기존 인덱스의 vector 차원을 단순 변경해 재사용할 수 없습니다.
+
+모델명만 바뀌고 embedding 입력 hash가 그대로라면 재계산 필요 여부는 저장된 `embeddingModel`과 현재 모델 비교로 판정되므로, 모델 변경만을 이유로 `SYNC_DATA`가 항상 필요한 것은 아닙니다. 다만 #12 최초 배포에는 신규 `contentInputHash` 반영과 구버전 writer 위험 통제를 위해 위 순서대로 `SYNC_DATA`를 실행합니다.
