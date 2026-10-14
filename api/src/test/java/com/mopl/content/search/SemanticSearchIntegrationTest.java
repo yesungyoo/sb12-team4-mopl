@@ -46,6 +46,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 @SpringBootTest(properties = {
@@ -208,6 +211,133 @@ public class SemanticSearchIntegrationTest {
                 .isEqualTo("Updated Title");
         assertThat(updatedDocument.getEmbedding())
                 .containsExactlyElementsOf(existingEmbedding);
+    }
+
+    @Test
+    void ordinaryIndexingPreservesEmbeddingAndMetadataWhileUpdatingContentFields() {
+        Content content = createContent(
+                "Original Indexed Title",
+                "Original indexed description"
+        );
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        List<Double> generatedEmbedding = createVector(2);
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenReturn(new EmbeddingResponse(generatedEmbedding));
+        contentEmbeddingIndexer.index(content);
+
+        ContentSearchDocument beforeUpdate = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        String previousContentInputHash = beforeUpdate.getContentInputHash();
+        String embeddingInputHash = beforeUpdate.getEmbeddingInputHash();
+        String embeddingModel = beforeUpdate.getEmbeddingModel();
+        List<Float> existingEmbedding = List.copyOf(beforeUpdate.getEmbedding());
+
+        content.update(
+                null,
+                "Updated Indexed Title",
+                "Updated indexed description",
+                null,
+                null
+        );
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        ContentSearchDocument afterUpdate = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+
+        assertThat(afterUpdate.getTitle()).isEqualTo("Updated Indexed Title");
+        assertThat(afterUpdate.getDescription())
+                .isEqualTo("Updated indexed description");
+        assertThat(afterUpdate.getContentInputHash())
+                .isNotEqualTo(previousContentInputHash);
+        assertThat(afterUpdate.getEmbedding())
+                .containsExactlyElementsOf(existingEmbedding);
+        assertThat(afterUpdate.getEmbeddingInputHash())
+                .isEqualTo(embeddingInputHash);
+        assertThat(afterUpdate.getEmbeddingModel())
+                .isEqualTo(embeddingModel);
+    }
+
+    @Test
+    void delayedEmbeddingForOldInputCannotOverwriteLatestEmbedding() throws Exception {
+        String oldTitle = "Old Embedding Input Title";
+        String latestTitle = "Latest Embedding Input Title";
+        Content content = createContent(oldTitle, "Original description");
+        contentRepository.saveAndFlush(content);
+        contentSearchIndexer.index(content);
+
+        String oldInputHash = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow()
+                .getContentInputHash();
+        CountDownLatch oldEmbeddingStarted = new CountDownLatch(1);
+        CountDownLatch allowOldEmbeddingToFinish = new CountDownLatch(1);
+        List<Double> oldEmbedding = createVector(0);
+        List<Double> latestEmbedding = createVector(1);
+
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenAnswer(invocation -> {
+                    EmbeddingRequest request = invocation.getArgument(0);
+                    if (request.input().contains(oldTitle)) {
+                        oldEmbeddingStarted.countDown();
+                        if (!allowOldEmbeddingToFinish.await(10, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException(
+                                    "Timed out waiting to release old embedding"
+                            );
+                        }
+                        return new EmbeddingResponse(oldEmbedding);
+                    }
+                    return new EmbeddingResponse(latestEmbedding);
+                });
+
+        CompletableFuture<Void> oldEmbeddingTask = CompletableFuture.runAsync(
+                () -> contentEmbeddingIndexer.index(content)
+        );
+
+        try {
+            assertThat(oldEmbeddingStarted.await(10, TimeUnit.SECONDS))
+                    .isTrue();
+
+            content.update(
+                    null,
+                    latestTitle,
+                    "Latest description",
+                    null,
+                    null
+            );
+            contentRepository.saveAndFlush(content);
+            contentSearchIndexer.index(content);
+            contentEmbeddingIndexer.index(content);
+        } finally {
+            allowOldEmbeddingToFinish.countDown();
+        }
+
+        oldEmbeddingTask.get(10, TimeUnit.SECONDS);
+
+        ContentSearchDocument latestDocument = contentSearchRepository
+                .findById(content.getId().toString())
+                .orElseThrow();
+        assertThat(latestDocument.getTitle()).isEqualTo(latestTitle);
+        assertThat(latestDocument.getDescription())
+                .isEqualTo("Latest description");
+        assertThat(latestDocument.getContentInputHash())
+                .isNotEqualTo(oldInputHash);
+        assertThat(latestDocument.getEmbedding())
+                .containsExactlyElementsOf(
+                        latestEmbedding.stream()
+                                .map(Double::floatValue)
+                                .toList()
+                );
+        assertThat(latestDocument.getEmbeddingInputHash())
+                .isEqualTo(latestDocument.getContentInputHash());
+        assertThat(latestDocument.getEmbeddingModel())
+                .isEqualTo(aiProperties.embeddingModel());
+        verify(embeddingClient, times(2))
+                .embed(any(EmbeddingRequest.class));
     }
 
     @Test
