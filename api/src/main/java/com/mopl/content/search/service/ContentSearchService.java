@@ -168,11 +168,10 @@ public class ContentSearchService {
                                 contentIds.size()
                         )
                 )
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
-
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
 
         SearchHits<ContentSearchDocument> searchHits =
                 elasticsearchOperations.search(
@@ -393,7 +392,10 @@ public class ContentSearchService {
                                         )
                                 )
                         )
-                        .withTrackTotalHits(true);
+                        .withTrackTotalHits(true)
+                        .withSourceFilter(
+                                ContentSearchSourceFilters.withoutEmbedding()
+                        );
 
         List<Query> filters =
                 buildFilters(condition);
@@ -416,11 +418,7 @@ public class ContentSearchService {
             );
         }
 
-        NativeQuery query = queryBuilder.build();
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
-        return query;
+        return queryBuilder.build();
     }
 
     private Query buildSearchQuery(

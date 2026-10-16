@@ -225,11 +225,10 @@ public class RecommendationSectionSearchService {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(Query.of(q -> q.ids(ids -> ids.values(elasticsearchIds))))
                 .withPageable(PageRequest.of(0, orderedContentIds.size()))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
-
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
 
         SearchHits<ContentSearchDocument> searchHits =
                 elasticsearchOperations.search(
@@ -366,7 +365,10 @@ public class RecommendationSectionSearchService {
                         page,
                         pageSize,
                         sort
-                ));
+                ))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                );
 
         if (!filters.isEmpty()) {
             queryBuilder.withFilter(
@@ -376,13 +378,8 @@ public class RecommendationSectionSearchService {
             );
         }
 
-        NativeQuery query = queryBuilder.build();
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
-
         return elasticsearchOperations.search(
-                query,
+                queryBuilder.build(),
                 ContentSearchDocument.class
         );
     }

@@ -102,11 +102,10 @@ public class ColdStartRecommendationService {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(buildPopularQuery(excludedContentIds))
                 .withPageable(PageRequest.of(page, candidateSize, buildPopularitySort()))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
-
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
 
         return elasticsearchOperations.search(query, ContentSearchDocument.class);
     }

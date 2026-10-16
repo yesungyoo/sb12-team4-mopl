@@ -37,7 +37,6 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class SemanticCandidateSearchService {
 
-    private static final String EMBEDDING_FIELD = "embedding";
     private static final int NUM_CANDIDATES_MULTIPLIER = 5;
     private static final int MAX_CANDIDATE_SIZE = 10_000;
     private static final int OVER_FETCH_MULTIPLIER = 2;
@@ -136,9 +135,9 @@ public class SemanticCandidateSearchService {
         int numCandidates = calculateNumCandidates(fetchSize);
         List<Query> filters = buildFilters(condition);
 
-        NativeQuery query = NativeQuery.builder()
+        return NativeQuery.builder()
                 .withKnnSearches(knn -> {
-                    knn.field(EMBEDDING_FIELD)
+                    knn.field(ContentSearchDocument.EMBEDDING_FIELD)
                             .queryVector(queryVector)
                             .k(fetchSize)
                             .numCandidates(numCandidates);
@@ -150,12 +149,10 @@ public class SemanticCandidateSearchService {
                     return knn;
                 })
                 .withPageable(PageRequest.of(0, fetchSize))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
-
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
-        return query;
     }
 
     private List<Query> buildFilters(SemanticCandidateCondition condition) {

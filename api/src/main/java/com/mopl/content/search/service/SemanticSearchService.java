@@ -36,7 +36,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SemanticSearchService {
 
-    private static final String EMBEDDING_FIELD = "embedding";
     private static final int NUM_CANDIDATES_MULTIPLIER = 5;
     private static final int MAX_NUM_CANDIDATES = 10_000;
 
@@ -122,20 +121,18 @@ public class SemanticSearchService {
         int neighborCount = calculateNeighborCount(pageable);
         int numCandidates = calculateNumCandidates(neighborCount);
 
-        NativeQuery query = NativeQuery.builder()
+        return NativeQuery.builder()
                 .withKnnSearches(knn -> knn
-                        .field(EMBEDDING_FIELD)
+                        .field(ContentSearchDocument.EMBEDDING_FIELD)
                         .queryVector(queryVector)
                         .k(neighborCount)
                         .numCandidates(numCandidates))
                 .withPageable(PageRequest.of(pageable.getPageNumber(), pageable.getPageSize()))
                 .withTrackTotalHits(true)
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
-
-        query.addSourceFilter(
-                ContentSearchSourceFilters.withoutEmbedding()
-        );
-        return query;
     }
 
     // 페이지 offset까지 포함한 결과를 먼저 뽑아야 다음 페이지를 조회할 수 있으므로 k 계산

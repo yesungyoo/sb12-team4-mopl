@@ -3,6 +3,7 @@ package com.mopl.content.search.service;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
@@ -21,10 +22,11 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.MultiGetItem;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
-import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.elasticsearch.core.query.UpdateResponse;
@@ -90,16 +92,10 @@ public class ContentEmbeddingIndexer {
                             content.getId()
                     );
 
-            SearchHit<ContentSearchDocument> documentHit =
-                    elasticsearchOperations.searchOne(
-                            buildDocumentMetadataQuery(content.getId()),
-                            ContentSearchDocument.class,
-                            elasticsearchOperations.getIndexCoordinatesFor(
-                                    ContentSearchDocument.class
-                            )
-                    );
+            ContentSearchDocument document =
+                    getDocumentMetadata(content.getId());
 
-            if (documentHit == null) {
+            if (document == null) {
                 log.warn(
                         "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
                         content.getId()
@@ -110,7 +106,7 @@ public class ContentEmbeddingIndexer {
             indexExistingDocument(
                     content,
                     contentTags,
-                    documentHit.getContent()
+                    document
             );
         } catch (RuntimeException exception) {
             log.warn(
@@ -349,20 +345,20 @@ public class ContentEmbeddingIndexer {
     }
 
     private NativeQuery buildEmbeddingMetadataScanQuery() {
-        NativeQuery query = NativeQuery.builder()
+        return NativeQuery.builder()
                 .withQuery(queryBuilder -> queryBuilder.matchAll(matchAll -> matchAll))
                 // Scroll 조회에서 한 번에 Elasticsearch가 반환할 문서 수입니다.
                 .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.embeddingMetadataOnly()
+                )
                 .build();
-
-        addEmbeddingMetadataSourceFilter(query);
-        return query;
     }
 
     private NativeQuery buildMissingEmbeddingByIdsQuery(
             List<UUID> contentIds
     ) {
-        NativeQuery query = NativeQuery.builder()
+        return NativeQuery.builder()
                 .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
                         .must(must -> must.ids(ids -> ids.values(
                                 contentIds.stream()
@@ -370,56 +366,58 @@ public class ContentEmbeddingIndexer {
                                         .toList()
                         )))
                         .mustNot(mustNot -> mustNot.exists(exists -> exists
-                                .field("embedding")
+                                .field(ContentSearchDocument.EMBEDDING_FIELD)
                         ))
                 ))
                 .withPageable(PageRequest.of(0, SEARCH_SCROLL_BATCH_SIZE))
+                .withSourceFilter(ContentSearchSourceFilters.idOnly())
                 .build();
-
-        query.addSourceFilter(FetchSourceFilter.of(
-                builder -> builder.withIncludes("id")
-        ));
-        return query;
-    }
-
-    private NativeQuery buildDocumentMetadataQuery(UUID contentId) {
-        NativeQuery query = NativeQuery.builder()
-                .withQuery(queryBuilder -> queryBuilder.ids(ids -> ids.values(
-                        List.of(contentId.toString())
-                )))
-                .build();
-
-        addEmbeddingMetadataSourceFilter(query);
-        return query;
     }
 
     private NativeQuery buildDocumentEmbeddingExistsQuery(UUID contentId) {
-        NativeQuery query = NativeQuery.builder()
+        return NativeQuery.builder()
                 .withQuery(queryBuilder -> queryBuilder.bool(bool -> bool
                         .must(must -> must.ids(ids -> ids.values(
                                 List.of(contentId.toString())
                         )))
                         .must(must -> must.exists(exists -> exists
-                                .field("embedding")
+                                .field(ContentSearchDocument.EMBEDDING_FIELD)
                         ))
                 ))
+                .withSourceFilter(ContentSearchSourceFilters.idOnly())
                 .build();
-
-        query.addSourceFilter(FetchSourceFilter.of(
-                builder -> builder.withIncludes("id")
-        ));
-        return query;
     }
 
-    private void addEmbeddingMetadataSourceFilter(NativeQuery query) {
-        query.addSourceFilter(FetchSourceFilter.of(
-                builder -> builder.withIncludes(
-                        "id",
-                        "contentInputHash",
-                        "embeddingInputHash",
-                        "embeddingModel"
-                )
-        ));
+    private ContentSearchDocument getDocumentMetadata(UUID contentId) {
+        Query query = Query.multiGetQuery(List.of(contentId.toString()));
+        query.addSourceFilter(
+                ContentSearchSourceFilters.embeddingMetadataOnly()
+        );
+
+        List<MultiGetItem<ContentSearchDocument>> items =
+                elasticsearchOperations.multiGet(
+                        query,
+                        ContentSearchDocument.class,
+                        elasticsearchOperations.getIndexCoordinatesFor(
+                                ContentSearchDocument.class
+                        )
+                );
+
+        if (items.isEmpty()) {
+            return null;
+        }
+
+        MultiGetItem<ContentSearchDocument> item = items.getFirst();
+        if (item.isFailed()) {
+            MultiGetItem.Failure failure = item.getFailure();
+            throw new IllegalStateException(
+                    "Elasticsearch embedding 메타데이터 조회에 실패했습니다. contentId="
+                            + contentId,
+                    failure == null ? null : failure.getException()
+            );
+        }
+
+        return item.getItem();
     }
 
     private void collectMissingEmbeddingIds(
@@ -573,19 +571,13 @@ public class ContentEmbeddingIndexer {
     ) {
         UUID contentId = content.getId();
         String currentInputHash;
-        SearchHit<ContentSearchDocument> documentHit;
+        ContentSearchDocument document;
         try {
             currentInputHash = contentEmbeddingService.calculateInputHash(
                     content,
                     contentTags
             );
-            documentHit = elasticsearchOperations.searchOne(
-                    buildDocumentMetadataQuery(contentId),
-                    ContentSearchDocument.class,
-                    elasticsearchOperations.getIndexCoordinatesFor(
-                            ContentSearchDocument.class
-                    )
-            );
+            document = getDocumentMetadata(contentId);
         } catch (ResourceNotFoundException exception) {
             log.warn(
                     "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
@@ -601,7 +593,7 @@ public class ContentEmbeddingIndexer {
             return EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED;
         }
 
-        if (documentHit == null) {
+        if (document == null) {
             log.warn(
                     "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
                     contentId
@@ -609,7 +601,6 @@ public class ContentEmbeddingIndexer {
             return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
         }
 
-        ContentSearchDocument document = documentHit.getContent();
         String indexedInputHash = document.getContentInputHash();
         if (!StringUtils.hasText(indexedInputHash)) {
             log.warn(
@@ -656,6 +647,8 @@ public class ContentEmbeddingIndexer {
     }
 
     private boolean hasEmbedding(UUID contentId) {
+        // exists 쿼리는 near-realtime 검색입니다. 일반 동기화 경로는
+        // ContentSearchIndexer의 IMMEDIATE 갱신 후 이 메서드를 호출합니다.
         return elasticsearchOperations.searchOne(
                 buildDocumentEmbeddingExistsQuery(contentId),
                 ContentSearchDocument.class,

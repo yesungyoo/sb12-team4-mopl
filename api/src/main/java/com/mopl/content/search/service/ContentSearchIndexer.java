@@ -5,6 +5,7 @@ import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.repository.ContentViewRepository;
 import com.mopl.content.repository.projection.ContentViewStatisticsProjection;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
@@ -31,7 +32,6 @@ import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.BulkOptions;
-import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
@@ -293,9 +293,7 @@ public class ContentSearchIndexer {
     ) {
         Query query = Query.findAll();
         query.setPageable(PageRequest.of(0, BATCH_SIZE));
-        query.addSourceFilter(FetchSourceFilter.of(
-                builder -> builder.withIncludes("id")
-        ));
+        query.addSourceFilter(ContentSearchSourceFilters.idOnly());
 
         Set<String> staleDocumentIds = new LinkedHashSet<>();
 

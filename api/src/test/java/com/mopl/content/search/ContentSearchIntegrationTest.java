@@ -27,16 +27,13 @@ import java.time.LocalDate;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.SearchHit;
-import org.springframework.data.elasticsearch.core.SearchHitsIterator;
-import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
-import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -217,7 +214,7 @@ class ContentSearchIntegrationTest {
     }
 
     @Test
-    void idOnlySourceFilterExcludesEmbedding() {
+    void idLookupExcludesEmbeddingAndPreservesDtoMapping() {
         Content content = createContent(
                 ContentType.MOVIE,
                 "Source Filter 콘텐츠",
@@ -246,20 +243,22 @@ class ContentSearchIntegrationTest {
                 .hasSize(EMBEDDING_DIMENSIONS)
                 .allMatch(value -> value.equals(0.25F));
 
-        Query idOnlyQuery = Query.findAll();
-        idOnlyQuery.addSourceFilter(FetchSourceFilter.of(
-                builder -> builder.withIncludes("id")
-        ));
-        try (SearchHitsIterator<ContentSearchDocument> hits =
-                     elasticsearchOperations.searchForStream(
-                             idOnlyQuery,
-                             ContentSearchDocument.class
-                     )) {
-            assertThat(hits.hasNext()).isTrue();
-            SearchHit<ContentSearchDocument> hit = hits.next();
-            assertThat(hit.getId()).isEqualTo(content.getId().toString());
-            assertThat(hit.getContent().getEmbedding()).isNull();
-        }
+        Map<UUID, ContentSearchDocument> documents =
+                contentSearchService.findDocumentsByContentIds(
+                        List.of(content.getId())
+                );
+        ContentSearchDocument filteredDocument =
+                documents.get(content.getId());
+
+        assertThat(filteredDocument).isNotNull();
+        assertThat(filteredDocument.getEmbedding()).isNull();
+
+        ContentListItemResponse response = ContentListItemResponse.from(
+                content,
+                filteredDocument
+        );
+        assertThat(response.id()).isEqualTo(content.getId());
+        assertThat(response.title()).isEqualTo(content.getTitle());
     }
 
     @Test
