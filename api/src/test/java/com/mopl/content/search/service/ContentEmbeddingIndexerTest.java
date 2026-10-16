@@ -928,6 +928,26 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void metadataLookupWrapsRequestResourceNotFoundException() {
+        UUID contentId = UUID.randomUUID();
+        ResourceNotFoundException exception =
+                new ResourceNotFoundException("mget request failed");
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenThrow(exception);
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                contentEmbeddingIndexer,
+                "getDocumentMetadata",
+                contentId
+        ))
+                .isExactlyInstanceOf(IllegalStateException.class)
+                .hasCause(exception);
+    }
+
+    @Test
     void backfillCountsLatestMetadataReadFailureAsElasticsearchFailure() {
         enableAi();
         BackfillFixture fixture = createBackfillFixture(1);

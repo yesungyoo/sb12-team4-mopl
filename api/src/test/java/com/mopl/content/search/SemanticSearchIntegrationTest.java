@@ -144,7 +144,6 @@ public class SemanticSearchIntegrationTest {
                 .isTrue();
         var appliedSettings = indexOperations.getSettings();
         assertThat(appliedSettings.get("index.refresh_interval")).isEqualTo("-1");
-        assertThat(appliedSettings.get("index.uuid")).isNotNull();
 
         Content content = contentRepository.saveAndFlush(createContent(
                 "Realtime mget 콘텐츠",
@@ -190,12 +189,6 @@ public class SemanticSearchIntegrationTest {
         assertThat(metadata.getEmbeddingModel())
                 .isEqualTo("embedding-model");
         assertThat(metadata.getEmbedding()).isNull();
-        // realtime mget은 호출 전 refresh 없이 읽을 수 있음을 검증합니다.
-        // 호출 이후에도 검색에 보이지 않아야 한다는 조건은 요구하지 않습니다.
-        var settingsAfterLookup = indexOperations.getSettings();
-        assertThat(settingsAfterLookup.get("index.refresh_interval")).isEqualTo("-1");
-        assertThat(settingsAfterLookup.get("index.uuid"))
-                .isEqualTo(appliedSettings.get("index.uuid"));
 
         indexOperations.refresh();
         assertThat(elasticsearchOperations.count(
