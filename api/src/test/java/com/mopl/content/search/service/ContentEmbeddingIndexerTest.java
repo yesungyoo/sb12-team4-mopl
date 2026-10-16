@@ -951,6 +951,41 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void backfillStopsAfterConsecutiveMissingIndexMetadataReads() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(4);
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenThrow(new ResourceNotFoundException("index missing"));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(2L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT);
+        verify(elasticsearchOperations, times(2)).multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
     void backfillRecoversFailedEmbeddingOnTheNextRun() {
         enableAi();
         UUID contentId = UUID.randomUUID();

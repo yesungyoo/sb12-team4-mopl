@@ -394,14 +394,24 @@ public class ContentEmbeddingIndexer {
                 ContentSearchSourceFilters.embeddingMetadataOnly()
         );
 
-        List<MultiGetItem<ContentSearchDocument>> items =
-                elasticsearchOperations.multiGet(
-                        query,
-                        ContentSearchDocument.class,
-                        elasticsearchOperations.getIndexCoordinatesFor(
-                                ContentSearchDocument.class
-                        )
-                );
+        List<MultiGetItem<ContentSearchDocument>> items;
+        try {
+            items = elasticsearchOperations.multiGet(
+                    query,
+                    ContentSearchDocument.class,
+                    elasticsearchOperations.getIndexCoordinatesFor(
+                            ContentSearchDocument.class
+                    )
+            );
+        } catch (ResourceNotFoundException exception) {
+            // mget에서 문서 부재는 실패가 아닌 null 항목으로 반환됩니다.
+            // 이 예외는 인덱스 부재 등 요청 자체의 실패이므로 구분합니다.
+            throw new IllegalStateException(
+                    "Elasticsearch embedding 메타데이터 조회에 실패했습니다. contentId="
+                            + contentId,
+                    exception
+            );
+        }
 
         if (items.isEmpty()) {
             return null;
