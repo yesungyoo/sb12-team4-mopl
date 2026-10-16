@@ -7,6 +7,7 @@ import com.mopl.content.dto.ContentListResponse;
 import com.mopl.content.dto.ContentResponse;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
 import com.mopl.infrastructure.ai.config.AiAvailability;
@@ -121,7 +122,7 @@ public class SemanticSearchService {
         int neighborCount = calculateNeighborCount(pageable);
         int numCandidates = calculateNumCandidates(neighborCount);
 
-        return NativeQuery.builder()
+        NativeQuery query = NativeQuery.builder()
                 .withKnnSearches(knn -> knn
                         .field(EMBEDDING_FIELD)
                         .queryVector(queryVector)
@@ -130,6 +131,11 @@ public class SemanticSearchService {
                 .withPageable(PageRequest.of(pageable.getPageNumber(), pageable.getPageSize()))
                 .withTrackTotalHits(true)
                 .build();
+
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
+        return query;
     }
 
     // 페이지 offset까지 포함한 결과를 먼저 뽑아야 다음 페이지를 조회할 수 있으므로 k 계산

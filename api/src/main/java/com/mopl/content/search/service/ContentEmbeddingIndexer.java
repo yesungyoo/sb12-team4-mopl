@@ -3,7 +3,6 @@ package com.mopl.content.search.service;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
-import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.core.domain.content.entity.ContentTag;
 import com.mopl.infrastructure.ai.config.AiAvailability;
@@ -53,7 +52,6 @@ public class ContentEmbeddingIndexer {
 
     private final ContentRepository contentRepository;
     private final ContentTagRepository contentTagRepository;
-    private final ContentSearchRepository contentSearchRepository;
     private final ElasticsearchOperations elasticsearchOperations;
     private final ContentEmbeddingService contentEmbeddingService;
     private final AiProperties aiProperties;
@@ -68,7 +66,6 @@ public class ContentEmbeddingIndexer {
     public ContentEmbeddingIndexer(
             ContentRepository contentRepository,
             ContentTagRepository contentTagRepository,
-            ContentSearchRepository contentSearchRepository,
             ElasticsearchOperations elasticsearchOperations,
             ContentEmbeddingService contentEmbeddingService,
             AiProperties aiProperties,
@@ -76,7 +73,6 @@ public class ContentEmbeddingIndexer {
     ) {
         this.contentRepository = contentRepository;
         this.contentTagRepository = contentTagRepository;
-        this.contentSearchRepository = contentSearchRepository;
         this.elasticsearchOperations = elasticsearchOperations;
         this.contentEmbeddingService = contentEmbeddingService;
         this.aiProperties = aiProperties;
@@ -94,19 +90,28 @@ public class ContentEmbeddingIndexer {
                             content.getId()
                     );
 
-            contentSearchRepository
-                    .findById(content.getId().toString())
-                    .ifPresentOrElse(
-                            document -> indexExistingDocument(
-                                    content,
-                                    contentTags,
-                                    document
-                            ),
-                            () -> log.warn(
-                                    "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
-                                    content.getId()
+            SearchHit<ContentSearchDocument> documentHit =
+                    elasticsearchOperations.searchOne(
+                            buildDocumentMetadataQuery(content.getId()),
+                            ContentSearchDocument.class,
+                            elasticsearchOperations.getIndexCoordinatesFor(
+                                    ContentSearchDocument.class
                             )
                     );
+
+            if (documentHit == null) {
+                log.warn(
+                        "embedding을 추가할 Elasticsearch 문서가 없습니다. contentId={}",
+                        content.getId()
+                );
+                return;
+            }
+
+            indexExistingDocument(
+                    content,
+                    contentTags,
+                    documentHit.getContent()
+            );
         } catch (RuntimeException exception) {
             log.warn(
                     "콘텐츠 embedding 색인 준비에 실패했습니다. contentId={}",
@@ -141,11 +146,15 @@ public class ContentEmbeddingIndexer {
             return;
         }
 
-        if (!requiresEmbeddingRecalculation(
-                document,
-                currentInputHash,
-                aiProperties.embeddingModel()
-        )) {
+        boolean requiresMetadataRecalculation =
+                requiresEmbeddingMetadataRecalculation(
+                        document,
+                        currentInputHash,
+                        aiProperties.embeddingModel()
+                );
+
+        if (!requiresMetadataRecalculation
+                && hasEmbedding(content.getId())) {
             return;
         }
 
@@ -154,22 +163,6 @@ public class ContentEmbeddingIndexer {
                 contentTags,
                 RefreshPolicy.IMMEDIATE
         );
-    }
-
-    private boolean requiresEmbeddingRecalculation(
-            ContentSearchDocument document,
-            String currentInputHash,
-            String currentModel
-    ) {
-        List<Float> embedding = document.getEmbedding();
-
-        return embedding == null
-                || embedding.isEmpty()
-                || requiresEmbeddingMetadataRecalculation(
-                        document,
-                        currentInputHash,
-                        currentModel
-                );
     }
 
     private boolean requiresEmbeddingMetadataRecalculation(

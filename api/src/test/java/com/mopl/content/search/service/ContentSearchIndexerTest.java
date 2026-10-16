@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -1046,13 +1045,11 @@ class ContentSearchIndexerTest {
     @Test
     void updateStatisticsUpdatesOnlyStatisticsFieldsForExistingDocument() {
         UUID contentId = UUID.randomUUID();
-        ContentSearchDocument existingDocument =
-                mock(ContentSearchDocument.class);
         IndexCoordinates indexCoordinates =
                 IndexCoordinates.of("contents");
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(existingDocument));
+        when(contentSearchRepository.existsById(contentId.toString()))
+                .thenReturn(true);
         when(reviewRepository.findAverageRatingByContentId(contentId))
                 .thenReturn(null);
         when(reviewRepository.countByContentId(contentId))
@@ -1123,8 +1120,8 @@ class ContentSearchIndexerTest {
     void updateStatisticsDoesNothingWhenDocumentDoesNotExist() {
         UUID contentId = UUID.randomUUID();
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.empty());
+        when(contentSearchRepository.existsById(contentId.toString()))
+                .thenReturn(false);
 
         contentSearchIndexer.updateStatistics(contentId);
 

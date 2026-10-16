@@ -170,48 +170,47 @@ public class ContentSearchIndexer {
     }
 
     public void updateStatistics(UUID contentId) {
-        contentSearchRepository.findById(contentId.toString())
-                .ifPresent(ignored -> {
-                    SearchStatistics statistics =
-                            findStatistics(contentId);
+        if (contentSearchRepository.existsById(contentId.toString())) {
+            SearchStatistics statistics =
+                    findStatistics(contentId);
 
-                    Document updateDocument =
-                            Document.create();
+            Document updateDocument =
+                    Document.create();
 
-                    updateDocument.put(
-                            "averageRating",
-                            statistics.averageRating() == null
-                                    ? 0.0D
-                                    : statistics.averageRating()
-                    );
-                    updateDocument.put(
-                            "reviewCount",
-                            statistics.reviewCount()
-                    );
-                    updateDocument.put(
-                            "watcherCount",
-                            statistics.watcherCount()
-                    );
+            updateDocument.put(
+                    "averageRating",
+                    statistics.averageRating() == null
+                            ? 0.0D
+                            : statistics.averageRating()
+            );
+            updateDocument.put(
+                    "reviewCount",
+                    statistics.reviewCount()
+            );
+            updateDocument.put(
+                    "watcherCount",
+                    statistics.watcherCount()
+            );
 
-                    UpdateQuery updateQuery =
-                            UpdateQuery.builder(contentId.toString())
-                                    .withDocument(updateDocument)
-                                    .withRetryOnConflict(
-                                            UPDATE_RETRY_ON_CONFLICT
-                                    )
-                                    .withRefreshPolicy(
-                                            RefreshPolicy.IMMEDIATE
-                                    )
-                                    .build();
+            UpdateQuery updateQuery =
+                    UpdateQuery.builder(contentId.toString())
+                            .withDocument(updateDocument)
+                            .withRetryOnConflict(
+                                    UPDATE_RETRY_ON_CONFLICT
+                            )
+                            .withRefreshPolicy(
+                                    RefreshPolicy.IMMEDIATE
+                            )
+                            .build();
 
-                    elasticsearchOperations.update(
-                            updateQuery,
-                            elasticsearchOperations
-                                    .getIndexCoordinatesFor(
-                                            ContentSearchDocument.class
-                                    )
-                    );
-                });
+            elasticsearchOperations.update(
+                    updateQuery,
+                    elasticsearchOperations
+                            .getIndexCoordinatesFor(
+                                    ContentSearchDocument.class
+                            )
+            );
+        }
     }
 
     public void delete(UUID contentId) {

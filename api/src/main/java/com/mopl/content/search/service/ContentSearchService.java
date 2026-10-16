@@ -10,6 +10,7 @@ import com.mopl.content.dto.ContentSortBy;
 import com.mopl.content.dto.ContentSortDirection;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.domain.content.entity.Content;
@@ -168,6 +169,10 @@ public class ContentSearchService {
                         )
                 )
                 .build();
+
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
 
         SearchHits<ContentSearchDocument> searchHits =
                 elasticsearchOperations.search(
@@ -411,7 +416,11 @@ public class ContentSearchService {
             );
         }
 
-        return queryBuilder.build();
+        NativeQuery query = queryBuilder.build();
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
+        return query;
     }
 
     private Query buildSearchQuery(

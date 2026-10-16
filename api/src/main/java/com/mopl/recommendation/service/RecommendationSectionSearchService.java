@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.recommendation.dto.RecommendationPreferredTag;
@@ -226,6 +227,10 @@ public class RecommendationSectionSearchService {
                 .withPageable(PageRequest.of(0, orderedContentIds.size()))
                 .build();
 
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
+
         SearchHits<ContentSearchDocument> searchHits =
                 elasticsearchOperations.search(
                         query,
@@ -371,8 +376,13 @@ public class RecommendationSectionSearchService {
             );
         }
 
+        NativeQuery query = queryBuilder.build();
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
+
         return elasticsearchOperations.search(
-                queryBuilder.build(),
+                query,
                 ContentSearchDocument.class
         );
     }

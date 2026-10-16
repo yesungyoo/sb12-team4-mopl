@@ -22,6 +22,7 @@ import com.mopl.content.search.condition.ContentTagCondition;
 import com.mopl.content.search.condition.SemanticCandidateCondition;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.dto.ContentCandidate;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.infrastructure.ai.client.EmbeddingClient;
 import com.mopl.infrastructure.ai.config.AiAvailability;
@@ -135,7 +136,7 @@ public class SemanticCandidateSearchService {
         int numCandidates = calculateNumCandidates(fetchSize);
         List<Query> filters = buildFilters(condition);
 
-        return NativeQuery.builder()
+        NativeQuery query = NativeQuery.builder()
                 .withKnnSearches(knn -> {
                     knn.field(EMBEDDING_FIELD)
                             .queryVector(queryVector)
@@ -150,6 +151,11 @@ public class SemanticCandidateSearchService {
                 })
                 .withPageable(PageRequest.of(0, fetchSize))
                 .build();
+
+        query.addSourceFilter(
+                ContentSearchSourceFilters.withoutEmbedding()
+        );
+        return query;
     }
 
     private List<Query> buildFilters(SemanticCandidateCondition condition) {
