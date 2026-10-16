@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.dto.ContentCandidate;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.core.domain.content.entity.Content;
 import com.mopl.recommendation.config.RecommendationProperties;
 import com.mopl.recommendation.dto.RecommendationItem;
@@ -101,6 +102,9 @@ public class ColdStartRecommendationService {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(buildPopularQuery(excludedContentIds))
                 .withPageable(PageRequest.of(page, candidateSize, buildPopularitySort()))
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
+                )
                 .build();
 
         return elasticsearchOperations.search(query, ContentSearchDocument.class);

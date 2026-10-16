@@ -1,6 +1,7 @@
 package com.mopl.content.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
@@ -28,11 +29,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.MultiGetItem;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
+import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.index.Settings;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -46,6 +53,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -119,6 +127,114 @@ public class SemanticSearchIntegrationTest {
         }
         indexOperations.createWithMapping();
         contentRepository.deleteAllInBatch();
+    }
+
+    @Test
+    void metadataLookupUsesRealtimeMultiGetWithoutLoadingEmbedding() {
+        var indexOperations = elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        );
+        indexOperations.delete();
+        var settings = indexOperations.createSettings();
+        // createSettings()의 중첩 index.refresh_interval 기본값을 덮어씁니다.
+        settings.merge(new Settings(Map.of(
+                "index", Map.of("refresh_interval", "-1")
+        )));
+        assertThat(indexOperations.create(settings, indexOperations.createMapping()))
+                .isTrue();
+        var appliedSettings = indexOperations.getSettings();
+        assertThat(appliedSettings.get("index.refresh_interval")).isEqualTo("-1");
+
+        Content content = contentRepository.saveAndFlush(createContent(
+                "Realtime mget 콘텐츠",
+                "refresh 없이 메타데이터를 조회하는 문서"
+        ));
+        ContentSearchDocument document = ContentSearchDocument.from(
+                content,
+                List.of(),
+                createVector(0)
+        );
+        ReflectionTestUtils.setField(
+                document,
+                "contentInputHash",
+                "content-input-hash"
+        );
+        ReflectionTestUtils.setField(
+                document,
+                "embeddingInputHash",
+                "embedding-input-hash"
+        );
+        ReflectionTestUtils.setField(
+                document,
+                "embeddingModel",
+                "embedding-model"
+        );
+        indexWithoutRefresh(document);
+        assertThat(elasticsearchOperations.count(
+                Query.findAll(), ContentSearchDocument.class
+        )).isZero();
+
+        ContentSearchDocument metadata = ReflectionTestUtils.invokeMethod(
+                contentEmbeddingIndexer,
+                "getDocumentMetadata",
+                content.getId()
+        );
+
+        assertThat(metadata).isNotNull();
+        assertThat(metadata.getId()).isEqualTo(content.getId().toString());
+        assertThat(metadata.getContentInputHash())
+                .isEqualTo("content-input-hash");
+        assertThat(metadata.getEmbeddingInputHash())
+                .isEqualTo("embedding-input-hash");
+        assertThat(metadata.getEmbeddingModel())
+                .isEqualTo("embedding-model");
+        assertThat(metadata.getEmbedding()).isNull();
+
+        indexOperations.refresh();
+        assertThat(elasticsearchOperations.count(
+                Query.findAll(), ContentSearchDocument.class
+        )).isEqualTo(1L);
+    }
+
+    @Test
+    void metadataLookupReturnsNullWhenDocumentDoesNotExist() {
+        ContentSearchDocument metadata = ReflectionTestUtils.invokeMethod(
+                contentEmbeddingIndexer,
+                "getDocumentMetadata",
+                UUID.randomUUID()
+        );
+
+        assertThat(metadata).isNull();
+    }
+
+    @Test
+    void metadataLookupFailsWhenIndexDoesNotExist() {
+        elasticsearchOperations.indexOps(ContentSearchDocument.class).delete();
+        UUID contentId = UUID.randomUUID();
+        List<MultiGetItem<ContentSearchDocument>> items =
+                elasticsearchOperations.multiGet(
+                        Query.multiGetQuery(List.of(contentId.toString())),
+                        ContentSearchDocument.class,
+                        elasticsearchOperations.getIndexCoordinatesFor(
+                                ContentSearchDocument.class
+                        )
+                );
+
+        assertThat(items).singleElement().satisfies(item -> {
+            assertThat(item.isFailed()).isTrue();
+            assertThat(item.getItem()).isNull();
+            assertThat(item.getFailure()).isNotNull();
+        });
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                contentEmbeddingIndexer,
+                "getDocumentMetadata",
+                contentId
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Elasticsearch embedding 메타데이터 조회에 실패했습니다."
+                );
     }
 
     @Test
@@ -545,6 +661,24 @@ public class SemanticSearchIntegrationTest {
         return contentSearchRepository.findById(content.getId().toString())
                 .orElseThrow()
                 .getContentInputHash();
+    }
+
+    private void indexWithoutRefresh(ContentSearchDocument document) {
+        Document source = elasticsearchOperations
+                .getElasticsearchConverter()
+                .mapObject(document);
+        UpdateQuery updateQuery = UpdateQuery.builder(document.getId())
+                .withDocument(source)
+                .withDocAsUpsert(true)
+                .withRefreshPolicy(RefreshPolicy.NONE)
+                .build();
+
+        elasticsearchOperations.update(
+                updateQuery,
+                elasticsearchOperations.getIndexCoordinatesFor(
+                        ContentSearchDocument.class
+                )
+        );
     }
 
     private void indexEmbeddingFixture(

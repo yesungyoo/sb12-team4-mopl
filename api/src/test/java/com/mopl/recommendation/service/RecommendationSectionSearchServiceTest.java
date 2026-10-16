@@ -129,13 +129,20 @@ class RecommendationSectionSearchServiceTest {
                         secondContentId
                 );
 
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
         verify(
                 elasticsearchOperations,
                 times(2)
         ).search(
-                any(NativeQuery.class),
+                queryCaptor.capture(),
                 eq(ContentSearchDocument.class)
         );
+
+        assertThat(queryCaptor.getAllValues())
+                .allSatisfy(query -> assertThat(
+                        query.getSourceFilter().getExcludes()
+                ).containsExactly("embedding"));
     }
 
     @Test
@@ -310,6 +317,17 @@ class RecommendationSectionSearchServiceTest {
                         firstContentId,
                         thirdContentId
                 );
+
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+        verify(elasticsearchOperations).search(
+                queryCaptor.capture(),
+                eq(ContentSearchDocument.class)
+        );
+        assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
+                .isEmpty();
+        assertThat(queryCaptor.getValue().getSourceFilter().getExcludes())
+                .containsExactly("embedding");
     }
 
     @SuppressWarnings("unchecked")

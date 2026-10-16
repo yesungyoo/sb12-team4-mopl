@@ -10,6 +10,7 @@ import com.mopl.content.dto.ContentSortBy;
 import com.mopl.content.dto.ContentSortDirection;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
+import com.mopl.content.search.query.ContentSearchSourceFilters;
 import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.common.dto.CursorResponse;
 import com.mopl.core.domain.content.entity.Content;
@@ -166,6 +167,9 @@ public class ContentSearchService {
                                 0,
                                 contentIds.size()
                         )
+                )
+                .withSourceFilter(
+                        ContentSearchSourceFilters.withoutEmbedding()
                 )
                 .build();
 
@@ -388,7 +392,10 @@ public class ContentSearchService {
                                         )
                                 )
                         )
-                        .withTrackTotalHits(true);
+                        .withTrackTotalHits(true)
+                        .withSourceFilter(
+                                ContentSearchSourceFilters.withoutEmbedding()
+                        );
 
         List<Query> filters =
                 buildFilters(condition);

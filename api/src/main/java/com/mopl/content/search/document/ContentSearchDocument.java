@@ -19,6 +19,7 @@ import java.util.List;
 @Document(indexName = "contents")
 public class ContentSearchDocument {
 
+    public static final String EMBEDDING_FIELD = "embedding";
     private static final int EMBEDDING_DIMENSIONS = 1536;
 
     @Id

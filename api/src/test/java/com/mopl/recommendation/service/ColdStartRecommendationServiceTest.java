@@ -67,6 +67,17 @@ class ColdStartRecommendationServiceTest {
         List<RecommendationItem> result = coldStartRecommendationService.recommend();
 
         assertThat(result).isEmpty();
+
+        ArgumentCaptor<NativeQuery> queryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+        verify(elasticsearchOperations).search(
+                queryCaptor.capture(),
+                eq(ContentSearchDocument.class)
+        );
+        assertThat(queryCaptor.getValue().getSourceFilter().getIncludes())
+                .isEmpty();
+        assertThat(queryCaptor.getValue().getSourceFilter().getExcludes())
+                .containsExactly("embedding");
     }
 
     @Test

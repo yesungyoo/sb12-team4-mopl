@@ -22,7 +22,6 @@ import static org.mockito.Mockito.when;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.repository.ContentTagRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
-import com.mopl.content.search.repository.ContentSearchRepository;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.domain.content.entity.Content;
@@ -34,7 +33,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -51,11 +49,13 @@ import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
+import org.springframework.data.elasticsearch.core.MultiGetItem;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.elasticsearch.core.query.UpdateResponse;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -75,9 +75,6 @@ class ContentEmbeddingIndexerTest {
 
     @Mock
     private ContentTagRepository contentTagRepository;
-
-    @Mock
-    private ContentSearchRepository contentSearchRepository;
 
     @Mock
     private ElasticsearchOperations elasticsearchOperations;
@@ -141,6 +138,13 @@ class ContentEmbeddingIndexerTest {
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
         )).thenReturn(backfillDocumentHit);
+        lenient().when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(List.of(
+                MultiGetItem.of(backfillDocument, null)
+        ));
     }
 
     @Test
@@ -158,7 +162,6 @@ class ContentEmbeddingIndexerTest {
         verifyNoInteractions(
                 contentRepository,
                 contentTagRepository,
-                contentSearchRepository,
                 elasticsearchOperations,
                 contentEmbeddingService
         );
@@ -179,7 +182,6 @@ class ContentEmbeddingIndexerTest {
         verifyNoInteractions(
                 contentRepository,
                 contentTagRepository,
-                contentSearchRepository,
                 elasticsearchOperations,
                 contentEmbeddingService
         );
@@ -192,8 +194,6 @@ class ContentEmbeddingIndexerTest {
 
         when(document.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
-        when(document.getEmbedding())
-                .thenReturn(List.of(0.1F));
         when(document.getEmbeddingInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
         when(document.getEmbeddingModel())
@@ -205,7 +205,42 @@ class ContentEmbeddingIndexerTest {
 
         verify(contentEmbeddingService, never())
                 .embedContentWithMetadata(content, contentTags);
-        verifyNoInteractions(elasticsearchOperations);
+
+        ArgumentCaptor<Query> metadataQueryCaptor =
+                ArgumentCaptor.forClass(Query.class);
+        verify(elasticsearchOperations).multiGet(
+                metadataQueryCaptor.capture(),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
+
+        ArgumentCaptor<NativeQuery> existsQueryCaptor =
+                ArgumentCaptor.forClass(NativeQuery.class);
+        verify(elasticsearchOperations).searchOne(
+                existsQueryCaptor.capture(),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
+
+        assertThat(metadataQueryCaptor.getValue()
+                .getSourceFilter().getIncludes())
+                .containsExactly(
+                        "id",
+                        "contentInputHash",
+                        "embeddingInputHash",
+                        "embeddingModel"
+                );
+        assertThat(metadataQueryCaptor.getValue()
+                .getSourceFilter().getExcludes())
+                .isEmpty();
+        assertThat(metadataQueryCaptor.getValue().getIds())
+                .containsExactly(content.getId().toString());
+        assertThat(existsQueryCaptor.getValue()
+                .getSourceFilter().getIncludes())
+                .containsExactly("id");
+        assertThat(existsQueryCaptor.getValue()
+                .getSourceFilter().getExcludes())
+                .isEmpty();
     }
 
     @Test
@@ -215,8 +250,6 @@ class ContentEmbeddingIndexerTest {
 
         when(document.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
-        when(document.getEmbedding())
-                .thenReturn(List.of(0.1F));
         when(document.getEmbeddingInputHash())
                 .thenReturn("outdated-input-hash");
         when(aiProperties.embeddingModel())
@@ -236,8 +269,6 @@ class ContentEmbeddingIndexerTest {
 
         when(document.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
-        when(document.getEmbedding())
-                .thenReturn(List.of(0.1F));
         when(document.getEmbeddingInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
         when(document.getEmbeddingModel())
@@ -259,8 +290,6 @@ class ContentEmbeddingIndexerTest {
 
         when(document.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
-        when(document.getEmbedding())
-                .thenReturn(List.of(0.1F));
         when(aiProperties.embeddingModel())
                 .thenReturn(CURRENT_EMBEDDING_MODEL);
         stubSuccessfulEmbedding(contentTags);
@@ -274,10 +303,15 @@ class ContentEmbeddingIndexerTest {
     @Test
     void recalculatesWhenEmbeddingIsMissing() {
         List<ContentTag> contentTags =
-                prepareExistingDocumentForIndex();
+                prepareIndexInput();
+        stubMissingEmbeddingLookup();
 
         when(document.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
+        when(document.getEmbeddingInputHash())
+                .thenReturn(CURRENT_INPUT_HASH);
+        when(document.getEmbeddingModel())
+                .thenReturn(CURRENT_EMBEDDING_MODEL);
         when(aiProperties.embeddingModel())
                 .thenReturn(CURRENT_EMBEDDING_MODEL);
         stubSuccessfulEmbedding(contentTags);
@@ -286,6 +320,16 @@ class ContentEmbeddingIndexerTest {
 
         verify(contentEmbeddingService)
                 .embedContentWithMetadata(content, contentTags);
+        verify(elasticsearchOperations).multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
+        verify(elasticsearchOperations).searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
     }
 
     @Test
@@ -298,7 +342,8 @@ class ContentEmbeddingIndexerTest {
         verify(contentEmbeddingService, never())
                 .embedContentWithMetadata(content, contentTags);
         verify(aiProperties, never()).embeddingModel();
-        verifyNoInteractions(elasticsearchOperations);
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any(IndexCoordinates.class));
     }
 
     @Test
@@ -314,7 +359,8 @@ class ContentEmbeddingIndexerTest {
         verify(contentEmbeddingService, never())
                 .embedContentWithMetadata(content, contentTags);
         verify(aiProperties, never()).embeddingModel();
-        verifyNoInteractions(elasticsearchOperations);
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any(IndexCoordinates.class));
     }
 
     @Test
@@ -326,8 +372,13 @@ class ContentEmbeddingIndexerTest {
         when(content.getId()).thenReturn(contentId);
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.empty());
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(List.of(
+                MultiGetItem.<ContentSearchDocument>of(null, null)
+        ));
 
         contentEmbeddingIndexer.index(content);
 
@@ -335,7 +386,8 @@ class ContentEmbeddingIndexerTest {
                 .calculateInputHash(any(Content.class), anyList());
         verify(contentEmbeddingService, never())
                 .embedContentWithMetadata(any(Content.class), anyList());
-        verifyNoInteractions(elasticsearchOperations);
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any(IndexCoordinates.class));
     }
 
     @Test
@@ -356,8 +408,7 @@ class ContentEmbeddingIndexerTest {
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(document));
+        stubExistingDocumentLookup();
 
         stubMatchingContentInputHash(contentTags);
 
@@ -378,7 +429,6 @@ class ContentEmbeddingIndexerTest {
         InOrder indexingOrder =
                 inOrder(
                         contentTagRepository,
-                        contentSearchRepository,
                         contentEmbeddingService,
                         elasticsearchOperations
                 );
@@ -386,8 +436,12 @@ class ContentEmbeddingIndexerTest {
         indexingOrder.verify(contentTagRepository)
                 .findAllByContentId(contentId);
 
-        indexingOrder.verify(contentSearchRepository)
-                .findById(contentId.toString());
+        indexingOrder.verify(elasticsearchOperations)
+                .multiGet(
+                        any(Query.class),
+                        eq(ContentSearchDocument.class),
+                        same(indexCoordinates)
+                );
 
         indexingOrder.verify(contentEmbeddingService)
                 .calculateInputHash(content, contentTags);
@@ -440,8 +494,6 @@ class ContentEmbeddingIndexerTest {
 
         assertThat(updateQuery.getRefreshPolicy())
                 .isEqualTo(RefreshPolicy.IMMEDIATE);
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
     }
 
     @Test
@@ -468,8 +520,7 @@ class ContentEmbeddingIndexerTest {
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(document));
+        stubExistingDocumentLookup();
 
         stubMatchingContentInputHash(contentTags);
 
@@ -484,10 +535,8 @@ class ContentEmbeddingIndexerTest {
                 () -> contentEmbeddingIndexer.index(content)
         ).doesNotThrowAnyException();
 
-        verifyNoInteractions(elasticsearchOperations);
-
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any(IndexCoordinates.class));
     }
 
     @Test
@@ -508,8 +557,7 @@ class ContentEmbeddingIndexerTest {
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(document));
+        stubExistingDocumentLookup();
 
         stubMatchingContentInputHash(contentTags);
 
@@ -542,8 +590,6 @@ class ContentEmbeddingIndexerTest {
                         same(indexCoordinates)
                 );
 
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
     }
 
     @Test
@@ -679,8 +725,6 @@ class ContentEmbeddingIndexerTest {
         backfillOrder.verify(searchHits).close();
         backfillOrder.verify(contentEmbeddingService)
                 .embedContentWithMetadata(firstContent, List.of());
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
 
         verify(indexOperations)
                 .refresh();
@@ -796,20 +840,17 @@ class ContentEmbeddingIndexerTest {
         BackfillFixture fixture = createBackfillFixture(List.of(contentId));
         ContentSearchDocument currentDocument =
                 mock(ContentSearchDocument.class);
-        SearchHit<ContentSearchDocument> currentDocumentHit =
-                mock(SearchHit.class);
         when(currentDocument.getContentInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
         when(currentDocument.getEmbeddingInputHash())
                 .thenReturn(CURRENT_INPUT_HASH);
         when(currentDocument.getEmbeddingModel())
                 .thenReturn(CURRENT_EMBEDDING_MODEL);
-        when(currentDocumentHit.getContent()).thenReturn(currentDocument);
-        when(elasticsearchOperations.searchOne(
-                any(NativeQuery.class),
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
-        )).thenReturn(currentDocumentHit);
+        )).thenReturn(List.of(MultiGetItem.of(currentDocument, null)));
 
         ContentEmbeddingIndexer.BackfillResult result =
                 contentEmbeddingIndexer.backfillMissing();
@@ -840,7 +881,7 @@ class ContentEmbeddingIndexerTest {
                 any(NativeQuery.class),
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
-        )).thenReturn(backfillDocumentHit).thenReturn(null);
+        )).thenReturn(null);
         when(contentEmbeddingService.embedContentWithMetadata(
                 any(Content.class),
                 anyList()
@@ -867,11 +908,13 @@ class ContentEmbeddingIndexerTest {
     void backfillSkipsWhenElasticsearchDocumentWasDeleted() {
         enableAi();
         BackfillFixture fixture = createBackfillFixture(1);
-        when(elasticsearchOperations.searchOne(
-                any(NativeQuery.class),
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
-        )).thenReturn(null);
+        )).thenReturn(List.of(
+                MultiGetItem.<ContentSearchDocument>of(null, null)
+        ));
 
         ContentEmbeddingIndexer.BackfillResult result =
                 contentEmbeddingIndexer.backfillMissing();
@@ -885,11 +928,31 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void metadataLookupWrapsRequestResourceNotFoundException() {
+        UUID contentId = UUID.randomUUID();
+        ResourceNotFoundException exception =
+                new ResourceNotFoundException("mget request failed");
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenThrow(exception);
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                contentEmbeddingIndexer,
+                "getDocumentMetadata",
+                contentId
+        ))
+                .isExactlyInstanceOf(IllegalStateException.class)
+                .hasCause(exception);
+    }
+
+    @Test
     void backfillCountsLatestMetadataReadFailureAsElasticsearchFailure() {
         enableAi();
         BackfillFixture fixture = createBackfillFixture(1);
-        when(elasticsearchOperations.searchOne(
-                any(NativeQuery.class),
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
         )).thenThrow(new RuntimeException("Elasticsearch unavailable"));
@@ -902,6 +965,46 @@ class ContentEmbeddingIndexerTest {
         assertThat(result.skipped()).isZero();
         assertThat(result.stopReason())
                 .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason.NONE);
+        verify(contentEmbeddingService, never())
+                .embedContentWithMetadata(any(Content.class), anyList());
+        verify(fixture.searchHits()).close();
+    }
+
+    @Test
+    void backfillStopsAfterConsecutiveMissingIndexMetadataReads() {
+        enableAi();
+        ReflectionTestUtils.setField(
+                contentEmbeddingIndexer,
+                "maxConsecutiveElasticsearchFailures",
+                2
+        );
+        BackfillFixture fixture = createBackfillFixture(4);
+        MultiGetItem.Failure failure = mock(MultiGetItem.Failure.class);
+        when(failure.getException())
+                .thenReturn(new IllegalStateException("index_not_found_exception"));
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(List.of(
+                MultiGetItem.<ContentSearchDocument>of(null, failure)
+        ));
+
+        ContentEmbeddingIndexer.BackfillResult result =
+                contentEmbeddingIndexer.backfillMissing();
+
+        assertThat(result.succeeded()).isZero();
+        assertThat(result.failed()).isEqualTo(2L);
+        assertThat(result.skipped()).isZero();
+        assertThat(result.unprocessed()).isEqualTo(2L);
+        assertThat(result.stopReason())
+                .isEqualTo(ContentEmbeddingIndexer.BackfillStopReason
+                        .CONSECUTIVE_ELASTICSEARCH_FAILURE_LIMIT);
+        verify(elasticsearchOperations, times(2)).multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        );
         verify(contentEmbeddingService, never())
                 .embedContentWithMetadata(any(Content.class), anyList());
         verify(fixture.searchHits()).close();
@@ -1715,6 +1818,12 @@ class ContentEmbeddingIndexerTest {
     }
 
     private List<ContentTag> prepareExistingDocumentForIndex() {
+        List<ContentTag> contentTags = prepareIndexInput();
+        stubExistingDocumentLookup();
+        return contentTags;
+    }
+
+    private List<ContentTag> prepareIndexInput() {
         enableAi();
 
         UUID contentId = UUID.randomUUID();
@@ -1723,8 +1832,6 @@ class ContentEmbeddingIndexerTest {
         when(content.getId()).thenReturn(contentId);
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(document));
         when(contentEmbeddingService.calculateInputHash(
                 content,
                 contentTags
@@ -1758,7 +1865,6 @@ class ContentEmbeddingIndexerTest {
         return new ContentEmbeddingIndexer(
                 contentRepository,
                 contentTagRepository,
-                contentSearchRepository,
                 elasticsearchOperations,
                 contentEmbeddingService,
                 aiProperties,
@@ -1822,8 +1928,7 @@ class ContentEmbeddingIndexerTest {
         when(contentTagRepository.findAllByContentId(contentId))
                 .thenReturn(contentTags);
 
-        when(contentSearchRepository.findById(contentId.toString()))
-                .thenReturn(Optional.of(document));
+        stubExistingDocumentLookup();
 
         stubMatchingContentInputHash(contentTags);
 
@@ -1834,10 +1939,25 @@ class ContentEmbeddingIndexerTest {
 
         contentEmbeddingIndexer.index(content);
 
-        verifyNoInteractions(elasticsearchOperations);
+        verify(elasticsearchOperations, never())
+                .update(any(UpdateQuery.class), any(IndexCoordinates.class));
+    }
 
-        verify(contentSearchRepository, never())
-                .save(any(ContentSearchDocument.class));
+    private void stubExistingDocumentLookup() {
+        when(elasticsearchOperations.multiGet(
+                any(Query.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(List.of(MultiGetItem.of(document, null)));
+    }
+
+    private void stubMissingEmbeddingLookup() {
+        stubExistingDocumentLookup();
+        when(elasticsearchOperations.searchOne(
+                any(NativeQuery.class),
+                eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class)
+        )).thenReturn(null);
     }
 
     private void stubMatchingContentInputHash(
