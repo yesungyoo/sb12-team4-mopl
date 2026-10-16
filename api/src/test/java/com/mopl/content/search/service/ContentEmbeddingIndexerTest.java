@@ -959,11 +959,16 @@ class ContentEmbeddingIndexerTest {
                 2
         );
         BackfillFixture fixture = createBackfillFixture(4);
+        MultiGetItem.Failure failure = mock(MultiGetItem.Failure.class);
+        when(failure.getException())
+                .thenReturn(new IllegalStateException("index_not_found_exception"));
         when(elasticsearchOperations.multiGet(
                 any(Query.class),
                 eq(ContentSearchDocument.class),
                 any(IndexCoordinates.class)
-        )).thenThrow(new ResourceNotFoundException("index missing"));
+        )).thenReturn(List.of(
+                MultiGetItem.<ContentSearchDocument>of(null, failure)
+        ));
 
         ContentEmbeddingIndexer.BackfillResult result =
                 contentEmbeddingIndexer.backfillMissing();

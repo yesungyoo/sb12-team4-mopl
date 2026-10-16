@@ -404,8 +404,8 @@ public class ContentEmbeddingIndexer {
                     )
             );
         } catch (ResourceNotFoundException exception) {
-            // mget에서 문서 부재는 실패가 아닌 null 항목으로 반환됩니다.
-            // 이 예외는 인덱스 부재 등 요청 자체의 실패이므로 구분합니다.
+            // mget의 인덱스 부재는 아래 isFailed() 분기에서 처리합니다.
+            // 요청 자체가 예외를 던지는 경우에도 ES 실패로 처리하기 위한 방어 코드입니다.
             throw new IllegalStateException(
                     "Elasticsearch embedding 메타데이터 조회에 실패했습니다. contentId="
                             + contentId,
@@ -418,6 +418,7 @@ public class ContentEmbeddingIndexer {
         }
 
         MultiGetItem<ContentSearchDocument> item = items.getFirst();
+        // 문서 부재는 getItem() == null, 인덱스 부재는 실패 항목으로 반환됩니다.
         if (item.isFailed()) {
             MultiGetItem.Failure failure = item.getFailure();
             throw new IllegalStateException(
@@ -588,12 +589,6 @@ public class ContentEmbeddingIndexer {
                     contentTags
             );
             document = getDocumentMetadata(contentId);
-        } catch (ResourceNotFoundException exception) {
-            log.warn(
-                    "embedding Backfill 처리 전에 Elasticsearch 문서가 삭제되어 건너뜁니다. contentId={}",
-                    contentId
-            );
-            return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
         } catch (RuntimeException exception) {
             log.warn(
                     "embedding Backfill 최신 상태 확인에 실패했습니다. contentId={}",

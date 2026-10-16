@@ -32,6 +32,7 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.MultiGetItem;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.document.Document;
+import org.springframework.data.elasticsearch.core.index.Settings;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
@@ -130,6 +131,21 @@ public class SemanticSearchIntegrationTest {
 
     @Test
     void metadataLookupUsesRealtimeMultiGetWithoutLoadingEmbedding() {
+        var indexOperations = elasticsearchOperations.indexOps(
+                ContentSearchDocument.class
+        );
+        indexOperations.delete();
+        var settings = indexOperations.createSettings();
+        // createSettings()의 중첩 index.refresh_interval 기본값을 덮어씁니다.
+        settings.merge(new Settings(Map.of(
+                "index", Map.of("refresh_interval", "-1")
+        )));
+        assertThat(indexOperations.create(settings, indexOperations.createMapping()))
+                .isTrue();
+        var appliedSettings = indexOperations.getSettings();
+        assertThat(appliedSettings.get("index.refresh_interval")).isEqualTo("-1");
+        assertThat(appliedSettings.get("index.uuid")).isNotNull();
+
         Content content = contentRepository.saveAndFlush(createContent(
                 "Realtime mget 콘텐츠",
                 "refresh 없이 메타데이터를 조회하는 문서"
@@ -155,6 +171,9 @@ public class SemanticSearchIntegrationTest {
                 "embedding-model"
         );
         indexWithoutRefresh(document);
+        assertThat(elasticsearchOperations.count(
+                Query.findAll(), ContentSearchDocument.class
+        )).isZero();
 
         ContentSearchDocument metadata = ReflectionTestUtils.invokeMethod(
                 contentEmbeddingIndexer,
@@ -171,6 +190,17 @@ public class SemanticSearchIntegrationTest {
         assertThat(metadata.getEmbeddingModel())
                 .isEqualTo("embedding-model");
         assertThat(metadata.getEmbedding()).isNull();
+        // realtime mget은 호출 전 refresh 없이 읽을 수 있음을 검증합니다.
+        // 호출 이후에도 검색에 보이지 않아야 한다는 조건은 요구하지 않습니다.
+        var settingsAfterLookup = indexOperations.getSettings();
+        assertThat(settingsAfterLookup.get("index.refresh_interval")).isEqualTo("-1");
+        assertThat(settingsAfterLookup.get("index.uuid"))
+                .isEqualTo(appliedSettings.get("index.uuid"));
+
+        indexOperations.refresh();
+        assertThat(elasticsearchOperations.count(
+                Query.findAll(), ContentSearchDocument.class
+        )).isEqualTo(1L);
     }
 
     @Test
