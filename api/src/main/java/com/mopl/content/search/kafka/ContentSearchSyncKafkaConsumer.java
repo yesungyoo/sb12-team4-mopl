@@ -1,10 +1,10 @@
 package com.mopl.content.search.kafka;
 
 import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -22,7 +22,8 @@ public class ContentSearchSyncKafkaConsumer {
 
     private final ContentRepository contentRepository;
     private final ContentSearchIndexer contentSearchIndexer;
-    private final ContentEmbeddingIndexer contentEmbeddingIndexer;
+    private final ContentEmbeddingKafkaProducer contentEmbeddingKafkaProducer;
+    private final AiAvailability aiAvailability;
 
     @KafkaListener(
             topics = ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
@@ -39,7 +40,9 @@ public class ContentSearchSyncKafkaConsumer {
                     .ifPresentOrElse(
                             content -> {
                                 contentSearchIndexer.index(content);
-                                contentEmbeddingIndexer.index(content);
+                                if (aiAvailability.isAvailable()) {
+                                    contentEmbeddingKafkaProducer.publish(event.contentId());
+                                }
                             },
                             () -> contentSearchIndexer.delete(event.contentId())
                     );

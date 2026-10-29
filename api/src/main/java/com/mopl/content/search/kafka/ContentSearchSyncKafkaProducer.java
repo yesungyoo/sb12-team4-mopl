@@ -3,15 +3,14 @@ package com.mopl.content.search.kafka;
 import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 @ConditionalOnProperty(
         prefix = "spring.kafka",
         name = "bootstrap-servers"
@@ -19,6 +18,12 @@ import org.springframework.stereotype.Component;
 public class ContentSearchSyncKafkaProducer {
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
+
+    public ContentSearchSyncKafkaProducer(
+            @Qualifier("kafkaTemplate") KafkaTemplate<String, Object> kafkaTemplate
+    ) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
 
     public void publish(
             UUID contentId,

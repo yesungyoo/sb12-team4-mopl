@@ -82,7 +82,18 @@ public class ContentEmbeddingIndexer {
     }
 
     public void index(Content content) {
+        index(content, false);
+    }
+
+    public void indexForKafka(Content content) {
+        index(content, true);
+    }
+
+    private void index(Content content, boolean propagateFailure) {
         if (!aiAvailability.isAvailable()) {
+            if (propagateFailure) {
+                throw new IllegalStateException("AI 사용 불가 상태에서는 Embedding을 처리할 수 없습니다.");
+            }
             return;
         }
 
@@ -106,9 +117,13 @@ public class ContentEmbeddingIndexer {
             indexExistingDocument(
                     content,
                     contentTags,
-                    document
+                    document,
+                    propagateFailure
             );
         } catch (RuntimeException exception) {
+            if (propagateFailure) {
+                throw exception;
+            }
             log.warn(
                     "콘텐츠 embedding 색인 준비에 실패했습니다. contentId={}",
                     content.getId(),
@@ -120,7 +135,8 @@ public class ContentEmbeddingIndexer {
     private void indexExistingDocument(
             Content content,
             List<ContentTag> contentTags,
-            ContentSearchDocument document
+            ContentSearchDocument document,
+            boolean propagateFailure
     ) {
         String currentInputHash =
                 contentEmbeddingService.calculateInputHash(
@@ -154,11 +170,16 @@ public class ContentEmbeddingIndexer {
             return;
         }
 
-        embedAndUpdate(
+        EmbeddingUpdateResult result = embedAndUpdate(
                 content,
                 contentTags,
-                RefreshPolicy.IMMEDIATE
+                RefreshPolicy.IMMEDIATE,
+                propagateFailure
         );
+        if (propagateFailure && (result == EmbeddingUpdateResult.EMBEDDING_FAILED
+                || result == EmbeddingUpdateResult.ELASTICSEARCH_UPDATE_FAILED)) {
+            throw new IllegalStateException("콘텐츠 Embedding 처리 결과가 실패입니다. result=" + result);
+        }
     }
 
     private boolean requiresEmbeddingMetadataRecalculation(
@@ -668,6 +689,15 @@ public class ContentEmbeddingIndexer {
             List<ContentTag> contentTags,
             RefreshPolicy refreshPolicy
     ) {
+        return embedAndUpdate(content, contentTags, refreshPolicy, false);
+    }
+
+    private EmbeddingUpdateResult embedAndUpdate(
+            Content content,
+            List<ContentTag> contentTags,
+            RefreshPolicy refreshPolicy,
+            boolean propagateFailure
+    ) {
         ContentEmbeddingService.EmbeddingGeneration generation;
         try {
             generation = contentEmbeddingService.embedContentWithMetadata(
@@ -675,7 +705,7 @@ public class ContentEmbeddingIndexer {
                     contentTags
             );
         } catch (RuntimeException exception) {
-            if (findAuthenticationStatusCode(exception) != null) {
+            if (propagateFailure || findAuthenticationStatusCode(exception) != null) {
                 throw exception;
             }
             log.warn(
@@ -735,6 +765,9 @@ public class ContentEmbeddingIndexer {
             );
             return EmbeddingUpdateResult.DOCUMENT_NOT_FOUND;
         } catch (RuntimeException exception) {
+            if (propagateFailure) {
+                throw exception;
+            }
             log.warn(
                     "콘텐츠 Embedding 저장 단계에서 Elasticsearch 업데이트에 실패했습니다. contentId={}",
                     content.getId(),

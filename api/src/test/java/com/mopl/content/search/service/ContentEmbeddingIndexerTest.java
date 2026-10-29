@@ -540,6 +540,76 @@ class ContentEmbeddingIndexerTest {
     }
 
     @Test
+    void kafkaPathPropagatesGenerationFailureWithoutLosingCause() {
+        List<ContentTag> tags = prepareExistingDocumentForIndex();
+        when(document.getContentInputHash()).thenReturn(CURRENT_INPUT_HASH);
+        AiClientException failure = new AiClientException("rate limited", 429, null);
+        when(contentEmbeddingService.embedContentWithMetadata(content, tags)).thenThrow(failure);
+
+        assertThatThrownBy(() -> contentEmbeddingIndexer.indexForKafka(content)).isSameAs(failure);
+        verify(elasticsearchOperations, never()).update(any(UpdateQuery.class), any(IndexCoordinates.class));
+    }
+
+    @Test
+    void kafkaPathPropagatesMetadataReadFailure() {
+        enableAi();
+        when(content.getId()).thenReturn(UUID.randomUUID());
+        RuntimeException failure = new IllegalStateException("ES unavailable");
+        when(elasticsearchOperations.multiGet(any(Query.class), eq(ContentSearchDocument.class),
+                any(IndexCoordinates.class))).thenThrow(failure);
+
+        assertThatThrownBy(() -> contentEmbeddingIndexer.indexForKafka(content)).isSameAs(failure);
+    }
+
+    @Test
+    void kafkaPathPropagatesUpdateFailure() {
+        List<ContentTag> tags = prepareExistingDocumentForIndex();
+        when(document.getContentInputHash()).thenReturn(CURRENT_INPUT_HASH);
+        stubSuccessfulEmbedding(tags);
+        RuntimeException failure = new IllegalStateException("ES write failed");
+        when(elasticsearchOperations.update(any(UpdateQuery.class), any(IndexCoordinates.class)))
+                .thenThrow(failure);
+
+        assertThatThrownBy(() -> contentEmbeddingIndexer.indexForKafka(content)).isSameAs(failure);
+    }
+
+    @Test
+    void kafkaPathRejectsEmptyGenerationResult() {
+        List<ContentTag> tags = prepareExistingDocumentForIndex();
+        when(document.getContentInputHash()).thenReturn(CURRENT_INPUT_HASH);
+        when(contentEmbeddingService.embedContentWithMetadata(content, tags))
+                .thenReturn(embeddingGeneration(List.of()));
+
+        assertThatThrownBy(() -> contentEmbeddingIndexer.indexForKafka(content))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("EMBEDDING_FAILED");
+    }
+
+    @Test
+    void kafkaPathRejectsUnexpectedUpdateResult() {
+        List<ContentTag> tags = prepareExistingDocumentForIndex();
+        when(document.getContentInputHash()).thenReturn(CURRENT_INPUT_HASH);
+        stubSuccessfulEmbedding(tags);
+        when(elasticsearchOperations.update(any(UpdateQuery.class), any(IndexCoordinates.class)))
+                .thenReturn(null);
+
+        assertThatThrownBy(() -> contentEmbeddingIndexer.indexForKafka(content))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("ELASTICSEARCH_UPDATE_FAILED");
+    }
+
+    @Test
+    void kafkaPathKeepsStaleResultAndDeletedDocumentAsSkipped() {
+        List<ContentTag> tags = prepareExistingDocumentForIndex();
+        when(document.getContentInputHash()).thenReturn(CURRENT_INPUT_HASH);
+        stubSuccessfulEmbedding(tags);
+        when(elasticsearchOperations.update(any(UpdateQuery.class), any(IndexCoordinates.class)))
+                .thenReturn(new UpdateResponse(UpdateResponse.Result.NOOP))
+                .thenReturn(new UpdateResponse(UpdateResponse.Result.NOT_FOUND));
+
+        assertThatCode(() -> contentEmbeddingIndexer.indexForKafka(content)).doesNotThrowAnyException();
+        assertThatCode(() -> contentEmbeddingIndexer.indexForKafka(content)).doesNotThrowAnyException();
+    }
+
+    @Test
     void doesNotPropagateEmbeddingUpdateFailure() {
         enableAi();
 

@@ -2,6 +2,7 @@ package com.mopl.infrastructure.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.mopl.core.common.kafka.ContentEmbeddingKafkaEvent;
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -177,6 +178,16 @@ class KafkaConfigTest {
                         StandardCharsets.UTF_8
                 )
         ).isEqualTo(KafkaConfig.CONTENT_SEARCH_SYNC_TYPE_ID);
+    }
+
+    @Test
+    void roundTripsEmbeddingEventWithLogicalTypeId() {
+        ContentEmbeddingKafkaEvent event = new ContentEmbeddingKafkaEvent(UUID.randomUUID());
+        SerializedMessage message = serialize(event);
+
+        assertThat(new String(message.headers().lastHeader(TYPE_ID_HEADER).value(), StandardCharsets.UTF_8))
+                .isEqualTo(KafkaConfig.CONTENT_EMBEDDING_TYPE_ID);
+        assertThat(deserialize(message.headers(), message.value())).isEqualTo(event);
     }
 
     @Test
