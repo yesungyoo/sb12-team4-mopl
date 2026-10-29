@@ -25,6 +25,7 @@ class ContentEmbeddingKafkaConfigTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(KafkaConfig.class, ContentEmbeddingKafkaConfig.class,
+                    ContentSearchKafkaDltConfig.class, ContentSearchKafkaErrorHandlingConfig.class,
                     ContentEmbeddingKafkaConsumer.class, ContentEmbeddingKafkaProducer.class,
                     ContentSearchSyncKafkaProducer.class, AiConfig.class, AiAvailability.class)
             .withBean(ContentRepository.class, () -> mock(ContentRepository.class))

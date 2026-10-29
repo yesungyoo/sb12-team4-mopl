@@ -75,6 +75,28 @@ $env:MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES = "5"
 
 두 임계치는 각각 OpenAI Embedding 생성 실패와 Elasticsearch 저장 실패의 연속 허용 횟수입니다. 기본값은 각각 5이며 양수만 허용합니다. 환경 변수 이름은 Spring Boot의 relaxed binding 규칙에 맞춰 프로퍼티 이름의 하이픈을 제거한 형태입니다.
 
+## DLT_REPLAY — 선택 레코드 수동 재처리
+
+먼저 장애 원인을 해결하고 DLT Topic·Partition·Offset을 확인합니다. 재처리 도구는 해당
+레코드 하나만 읽고 consumer offset은 commit하지 않습니다. 원본 Topic 발행 ACK까지 확인한
+뒤 종료하므로 같은 명령을 다시 실행하면 중복 이벤트가 생길 수 있습니다. 재처리 전후의
+원본 group offset, DLT 위치, 콘텐츠 ID와 Elasticsearch 최종 상태를 기록하세요.
+DLT 재처리에는 `KAFKA_BOOTSTRAP_SERVERS` 또는 `spring.kafka.bootstrap-servers`도 설정해야 합니다.
+
+```powershell
+.\gradlew.bat :reindex-cli:bootRun --args="--mopl.reindex.mode=DLT_REPLAY --mopl.reindex.dlt.topic=content-search-sync-dlt --mopl.reindex.dlt.partition=0 --mopl.reindex.dlt.offset=42"
+```
+
+Embedding 실패는 `content-embedding-dlt`를 지정합니다. 일반 색인은 현재 MySQL의 활성/삭제
+상태를 기준으로 새 `content-search-sync` 이벤트를 만들고, Embedding은 현재 삭제 여부를
+확인한 뒤 기존 Consumer의 Hash·모델·조건부 벡터 갱신 검증을 다시 거칩니다. 존재하지 않거나
+삭제된 콘텐츠의 Embedding 레코드는 성공적으로 건너뜁니다.
+
+역직렬화 실패 DLT는 원본 raw bytes와 예외 헤더를 보존합니다. CLI는 해결되지 않은
+역직렬화 예외 헤더가 있거나 Type ID·JSON·Key/contentId 검증에 실패하면 재발행을 거부합니다.
+원본 데이터나 Type ID를 임의 수정해 재발행하지 말고, 원인을 확인해 별도 복구 절차를 마련하세요.
+DLT 레코드 자체는 삭제되지 않으며, 재처리를 반복하면 원본 이벤트가 중복될 수 있습니다.
+
 | 환경 변수 | 실제 Spring 프로퍼티 |
 | --- | --- |
 | `MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES` | `mopl.elasticsearch.embedding-backfill.max-consecutive-failures` |

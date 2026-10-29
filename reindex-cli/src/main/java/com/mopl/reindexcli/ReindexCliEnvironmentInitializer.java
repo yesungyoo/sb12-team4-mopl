@@ -36,6 +36,15 @@ public class ReindexCliEnvironmentInitializer
         configureDatabase(environment, properties);
         configureElasticsearch(environment, properties);
 
+        String kafkaBootstrapServers = firstConfiguredValue(
+                environment,
+                "spring.kafka.bootstrap-servers",
+                "KAFKA_BOOTSTRAP_SERVERS"
+        );
+        if (StringUtils.hasText(kafkaBootstrapServers)) {
+            properties.put("spring.kafka.bootstrap-servers", kafkaBootstrapServers);
+        }
+
         String apiKey = firstConfiguredValue(
                 environment,
                 "ai.openai.api-key",

@@ -2,6 +2,7 @@ package com.mopl.reindexcli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.infrastructure.ai.config.AiAvailability;
+import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -181,7 +183,8 @@ class ContentReindexCliRunnerTest {
         return new ContentReindexCliRunner(
                 contentSearchIndexer,
                 contentEmbeddingIndexer,
-                aiAvailability
+                aiAvailability,
+                mock(ObjectProvider.class)
         );
     }
 

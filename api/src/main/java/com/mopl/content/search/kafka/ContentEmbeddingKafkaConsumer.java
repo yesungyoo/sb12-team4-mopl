@@ -25,7 +25,7 @@ public class ContentEmbeddingKafkaConsumer {
             id = LISTENER_ID,
             topics = ContentSearchKafkaTopics.CONTENT_EMBEDDING,
             groupId = "${mopl.kafka.embedding.group-id:mopl-content-embedding-group}",
-            containerFactory = "kafkaListenerContainerFactory",
+            containerFactory = "contentEmbeddingKafkaListenerContainerFactory",
             concurrency = "${mopl.kafka.embedding.concurrency:1}",
             autoStartup = "#{@aiAvailability.isAvailable()}",
             properties = {

@@ -113,6 +113,25 @@ class ContentReindexCliApplicationTest {
     }
 
     @Test
+    void cliEnvironmentInitializerMapsOptionalKafkaBootstrapForDltReplay() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("DB_HOST", "localhost")
+                .withProperty("DB_PORT", "3306")
+                .withProperty("DB_NAME", "mopl")
+                .withProperty("DB_USERNAME", "mopl")
+                .withProperty("DB_PASSWORD", "test")
+                .withProperty("ELASTICSEARCH_URL", "http://localhost:9200")
+                .withProperty("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.setEnvironment(environment);
+
+        new ReindexCliEnvironmentInitializer().initialize(context);
+
+        assertThat(environment.getProperty("spring.kafka.bootstrap-servers"))
+                .isEqualTo("localhost:9092");
+    }
+
+    @Test
     void contextHasNoApiComponentScanOrSideEffectConfigurations() {
         assertThat(ContentReindexCliApplication.class
                 .isAnnotationPresent(ComponentScan.class))

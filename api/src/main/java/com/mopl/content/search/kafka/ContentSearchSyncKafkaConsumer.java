@@ -27,7 +27,7 @@ public class ContentSearchSyncKafkaConsumer {
 
     @KafkaListener(
             topics = ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "contentSearchSyncKafkaListenerContainerFactory"
     )
     public void consume(ContentSearchSyncKafkaEvent event) {
         try {
