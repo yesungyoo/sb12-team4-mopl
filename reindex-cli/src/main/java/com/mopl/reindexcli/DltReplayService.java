@@ -100,7 +100,7 @@ public class DltReplayService {
         if (isDeserializationFailure(exceptionType)
                 || isDeserializationFailure(causeType)
                 || isDeserializationFailure(keyExceptionType)) {
-            throw new IllegalStateException(
+            throw new IllegalArgumentException(
                     "역직렬화 실패 원인이 해결되지 않은 raw-byte DLT 레코드는 자동 재발행할 수 없습니다. "
                             + "Type ID/직렬화 원인을 먼저 확인하세요."
             );

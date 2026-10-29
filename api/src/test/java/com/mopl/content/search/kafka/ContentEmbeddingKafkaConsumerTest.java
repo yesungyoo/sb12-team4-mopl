@@ -62,7 +62,7 @@ class ContentEmbeddingKafkaConsumerTest {
         when(aiAvailability.isAvailable()).thenReturn(false);
 
         assertThatThrownBy(() -> consumer.consume(new ContentEmbeddingKafkaEvent(contentId)))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(AiUnavailableException.class);
         verifyNoInteractions(contentRepository, indexer);
     }
 }

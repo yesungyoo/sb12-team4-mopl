@@ -8,6 +8,12 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Set;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.elasticsearch.NoSuchIndexException;
+import org.springframework.data.elasticsearch.ResourceNotFoundException;
+import org.springframework.data.elasticsearch.RestStatusException;
+import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
+import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -17,7 +23,17 @@ public class ContentSearchKafkaFailureClassifier {
     public FailureType classify(Throwable failure) {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Throwable current = failure;
+        boolean ambiguousElasticsearchFailure = false;
         while (current != null && visited.add(current)) {
+            if (current instanceof DeserializationException) {
+                return FailureType.RECORD_PERMANENT;
+            }
+            if (current instanceof AiUnavailableException) {
+                return FailureType.COMMON_CONFIGURATION;
+            }
+            if (current instanceof NoSuchIndexException || current instanceof ResourceNotFoundException) {
+                return FailureType.COMMON_CONFIGURATION;
+            }
             if (current instanceof AiClientException aiFailure) {
                 FailureType type = classifyAiFailure(aiFailure);
                 if (type != FailureType.RETRY_THEN_DLT) {
@@ -51,11 +67,17 @@ public class ContentSearchKafkaFailureClassifier {
 
             FailureType elasticsearchType = classifyElasticsearchFailure(current);
             if (elasticsearchType != FailureType.RETRY_THEN_DLT) {
+                if (elasticsearchType == FailureType.COMMON_AMBIGUOUS
+                        && current instanceof DataAccessException) {
+                    ambiguousElasticsearchFailure = true;
+                    current = current.getCause();
+                    continue;
+                }
                 return elasticsearchType;
             }
             current = current.getCause();
         }
-        return FailureType.RETRY_THEN_DLT;
+        return ambiguousElasticsearchFailure ? FailureType.COMMON_AMBIGUOUS : FailureType.RETRY_THEN_DLT;
     }
 
     public boolean shouldSkipRetry(Throwable failure) {
@@ -111,35 +133,64 @@ public class ContentSearchKafkaFailureClassifier {
     }
 
     private FailureType classifyElasticsearchFailure(Throwable failure) {
-        String className = failure.getClass().getName();
-        if (!className.contains("Elasticsearch")
-                && !className.contains("RestStatusException")) {
+        Integer status = null;
+        String detail = null;
+        if (failure instanceof RestStatusException restStatusException) {
+            status = restStatusException.getStatus();
+            detail = restStatusException.getMessage();
+        } else if (failure instanceof UncategorizedElasticsearchException elasticsearchException) {
+            status = elasticsearchException.getStatusCode();
+            detail = firstNonBlank(elasticsearchException.getResponseBody(), elasticsearchException.getMessage());
+        } else if (failure instanceof org.springframework.data.elasticsearch.ResourceFailureException) {
+            return FailureType.COMMON_TRANSIENT;
+        } else if (!failure.getClass().getName().contains("Elasticsearch")) {
             return FailureType.RETRY_THEN_DLT;
+        } else {
+            status = reflectedStatus(failure);
+            detail = reflectedResponseBody(failure);
         }
 
-        Integer status = reflectedStatus(failure);
         if (status == null) {
             return FailureType.COMMON_AMBIGUOUS;
         }
-        return classifyHttpFailure(status, failure.getMessage(), false);
+        return classifyHttpFailure(status, detail, false);
     }
 
     private Integer reflectedStatus(Throwable failure) {
         try {
-            Object status = failure.getClass().getMethod("status").invoke(failure);
-            if (status instanceof Number number) {
-                return number.intValue();
-            }
-            if (status != null) {
-                Object code = status.getClass().getMethod("getStatus").invoke(status);
-                if (code instanceof Number number) {
-                    return number.intValue();
+            for (String methodName : new String[]{"getStatusCode", "getStatus", "status"}) {
+                try {
+                    Object status = failure.getClass().getMethod(methodName).invoke(failure);
+                    if (status instanceof Number number) {
+                        return number.intValue();
+                    }
+                    if (status != null) {
+                        Object code = status.getClass().getMethod("getStatus").invoke(status);
+                        if (code instanceof Number number) {
+                            return number.intValue();
+                        }
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    // Try the next status accessor used by Spring Data or the Elasticsearch client.
                 }
             }
         } catch (ReflectiveOperationException ignored) {
-            // Unknown Elasticsearch exception shapes are retried and then isolated in the DLT.
+            // Continue through the cause chain when an Elasticsearch client exposes another exception shape.
         }
         return null;
+    }
+
+    private String reflectedResponseBody(Throwable failure) {
+        try {
+            Object body = failure.getClass().getMethod("getResponseBody").invoke(failure);
+            return body instanceof String value ? value : failure.getMessage();
+        } catch (ReflectiveOperationException ignored) {
+            return failure.getMessage();
+        }
+    }
+
+    private String firstNonBlank(String preferred, String fallback) {
+        return preferred == null || preferred.isBlank() ? fallback : preferred;
     }
 
     private String findResponseBody(Throwable failure) {

@@ -52,7 +52,7 @@ public class ContentSearchKafkaRecordRecoverer implements ConsumerAwareRecordRec
                     "DLT 발행 ACK를 확인하지 못해 원본 파티션을 중지하고 offset을 보존합니다. listener={}, topic={}, partition={}, offset={}",
                     listenerName, record.topic(), record.partition(), record.offset(), dltFailure
             );
-            pauseRecoverer.accept(record, consumer, dltFailure);
+            pauseRecoverer.pauseAndKeepOffset(record, consumer, dltFailure);
         }
     }
 }

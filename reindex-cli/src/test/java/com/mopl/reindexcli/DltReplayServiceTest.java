@@ -157,7 +157,7 @@ class DltReplayServiceTest {
 
         assertThatThrownBy(() -> service.replay(
                 ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0, 8
-        )).isInstanceOf(IllegalStateException.class)
+        )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("역직렬화 실패 원인");
         verify(kafkaTemplate, never()).send(anyString(), anyString(), any());
     }
@@ -182,8 +182,22 @@ class DltReplayServiceTest {
 
         assertThatThrownBy(() -> service.replay(
                 ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0, 10
-        )).isInstanceOf(IllegalStateException.class)
+        )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("역직렬화 실패 원인");
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), any());
+    }
+
+    @Test
+    void replayRejectsOffsetBeyondLatestRecordWithoutRepublishing() {
+        DltReplayService fastService = new DltReplayService(
+                consumerFactory, kafkaTemplate, contentRepository, objectMapper, 1, 1000
+        );
+        when(consumer.poll(any(Duration.class))).thenReturn(new ConsumerRecords<>(Map.of()));
+
+        assertThatThrownBy(() -> fastService.replay(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0, 13
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("선택한 DLT offset에 레코드가 없습니다");
         verify(kafkaTemplate, never()).send(anyString(), anyString(), any());
     }
 
