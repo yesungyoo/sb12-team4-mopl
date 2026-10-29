@@ -1,5 +1,6 @@
 package com.mopl.infrastructure.config;
 
+import com.mopl.core.common.kafka.ContentEmbeddingKafkaEvent;
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import com.mopl.infrastructure.kafka.KafkaDeserializationFailureRecoverer;
 import com.mopl.infrastructure.kafka.KafkaListenerFailureRecoverer;
@@ -35,13 +36,19 @@ public class KafkaConfig {
 
   static final String CONTENT_SEARCH_SYNC_TYPE_ID = "contentSearchSync";
 
+  static final String CONTENT_EMBEDDING_TYPE_ID = "contentEmbedding";
+
   static final String LEGACY_CONTENT_SEARCH_SYNC_TYPE_ID =
       "com.mopl.content.search.kafka.event.ContentSearchSyncKafkaEvent";
 
   static final String PRODUCER_TYPE_MAPPINGS =
       CONTENT_SEARCH_SYNC_TYPE_ID
           + ":"
-          + ContentSearchSyncKafkaEvent.class.getName();
+          + ContentSearchSyncKafkaEvent.class.getName()
+          + ","
+          + CONTENT_EMBEDDING_TYPE_ID
+          + ":"
+          + ContentEmbeddingKafkaEvent.class.getName();
 
   static final String CONSUMER_TYPE_MAPPINGS =
       PRODUCER_TYPE_MAPPINGS

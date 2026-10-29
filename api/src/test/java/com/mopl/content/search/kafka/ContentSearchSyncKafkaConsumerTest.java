@@ -1,17 +1,20 @@
 package com.mopl.content.search.kafka;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mopl.content.repository.ContentRepository;
-import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent;
 import com.mopl.core.domain.content.entity.Content;
+import com.mopl.infrastructure.ai.config.AiAvailability;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +34,10 @@ class ContentSearchSyncKafkaConsumerTest {
     private ContentSearchIndexer contentSearchIndexer;
 
     @Mock
-    private ContentEmbeddingIndexer contentEmbeddingIndexer;
+    private ContentEmbeddingKafkaProducer contentEmbeddingKafkaProducer;
+
+    @Mock
+    private AiAvailability aiAvailability;
 
     @Mock
     private Content content;
@@ -40,11 +46,13 @@ class ContentSearchSyncKafkaConsumerTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(aiAvailability.isAvailable()).thenReturn(true);
         consumer =
                 new ContentSearchSyncKafkaConsumer(
                         contentRepository,
                         contentSearchIndexer,
-                        contentEmbeddingIndexer
+                        contentEmbeddingKafkaProducer,
+                        aiAvailability
                 );
     }
 
@@ -73,14 +81,14 @@ class ContentSearchSyncKafkaConsumerTest {
         InOrder indexingOrder =
                 inOrder(
                         contentSearchIndexer,
-                        contentEmbeddingIndexer
+                        contentEmbeddingKafkaProducer
                 );
 
         indexingOrder.verify(contentSearchIndexer)
                 .index(content);
 
-        indexingOrder.verify(contentEmbeddingIndexer)
-                .index(content);
+        indexingOrder.verify(contentEmbeddingKafkaProducer)
+                .publish(contentId);
 
         verify(contentSearchIndexer, never())
                 .delete(contentId);
@@ -107,8 +115,8 @@ class ContentSearchSyncKafkaConsumerTest {
         verify(contentSearchIndexer, never())
                 .index(content);
 
-        verify(contentEmbeddingIndexer, never())
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, never())
+                .publish(contentId);
     }
 
     @Test
@@ -139,8 +147,8 @@ class ContentSearchSyncKafkaConsumerTest {
         verify(contentSearchIndexer, never())
                 .index(content);
 
-        verify(contentEmbeddingIndexer, never())
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, never())
+                .publish(contentId);
     }
 
     @Test
@@ -169,8 +177,8 @@ class ContentSearchSyncKafkaConsumerTest {
         verify(contentSearchIndexer, times(2))
                 .index(content);
 
-        verify(contentEmbeddingIndexer, times(2))
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, times(2))
+                .publish(contentId);
     }
 
     @Test
@@ -192,8 +200,8 @@ class ContentSearchSyncKafkaConsumerTest {
         verify(contentRepository, never())
                 .findByIdAndDeletedAtIsNull(contentId);
 
-        verify(contentEmbeddingIndexer, never())
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, never())
+                .publish(contentId);
     }
 
     @Test
@@ -226,8 +234,8 @@ class ContentSearchSyncKafkaConsumerTest {
                 () -> consumer.consume(event)
         ).isSameAs(exception);
 
-        verify(contentEmbeddingIndexer, never())
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, never())
+                .publish(contentId);
     }
 
     @Test
@@ -253,7 +261,33 @@ class ContentSearchSyncKafkaConsumerTest {
                 () -> consumer.consume(event)
         ).isSameAs(exception);
 
-        verify(contentEmbeddingIndexer, never())
-                .index(content);
+        verify(contentEmbeddingKafkaProducer, never())
+                .publish(contentId);
+    }
+
+    @Test
+    void indexesWithoutPublishingWhenAiIsUnavailable() {
+        UUID contentId = UUID.randomUUID();
+        when(aiAvailability.isAvailable()).thenReturn(false);
+        when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
+                .thenReturn(Optional.of(content));
+
+        consumer.consume(new ContentSearchSyncKafkaEvent(contentId, false));
+
+        verify(contentSearchIndexer).index(content);
+        verifyNoInteractions(contentEmbeddingKafkaProducer);
+    }
+
+    @Test
+    void propagatesEmbeddingPublishFailureAfterIndexing() {
+        UUID contentId = UUID.randomUUID();
+        RuntimeException failure = new IllegalStateException("Kafka unavailable");
+        when(contentRepository.findByIdAndDeletedAtIsNull(contentId))
+                .thenReturn(Optional.of(content));
+        doThrow(failure).when(contentEmbeddingKafkaProducer).publish(contentId);
+
+        assertThatThrownBy(() -> consumer.consume(new ContentSearchSyncKafkaEvent(contentId, false)))
+                .isSameAs(failure);
+        verify(contentSearchIndexer).index(content);
     }
 }

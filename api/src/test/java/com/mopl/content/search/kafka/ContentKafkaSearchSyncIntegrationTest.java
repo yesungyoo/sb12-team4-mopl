@@ -260,10 +260,12 @@ class ContentKafkaSearchSyncIntegrationTest {
                 MessageListenerContainer listenerContainer
                 : kafkaListenerEndpointRegistry.getListenerContainers()
         ) {
-            ContainerTestUtils.waitForAssignment(
-                    listenerContainer,
-                    KAFKA_PARTITIONS
-            );
+            if (listenerContainer.isRunning()) {
+                ContainerTestUtils.waitForAssignment(
+                        listenerContainer,
+                        KAFKA_PARTITIONS
+                );
+            }
         }
     }
 

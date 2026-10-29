@@ -117,3 +117,88 @@ Batch는 `web-application-type: none`으로 구성되어 Job 완료 후 프로�
 `SYNC_DATA`는 기존 Embedding을 보존하며, 동기화 과정에서 발생한 예외는 종료 코드 `3`으로 반환된다.
 
 자세한 실행 방법과 종료 코드별 대응은 [검색 데이터 재색인 CLI 운영 안내](./content-search-reindex-cli.md)를 참고한다.
+
+## Issue #15 PR1 — Embedding Consumer 분리
+
+일반 Consumer는 최신 DB 콘텐츠의 Elasticsearch 색인에 성공한 뒤
+`content-embedding`에 `ContentEmbeddingKafkaEvent(contentId)`를 발행한다.
+Key는 `contentId` 문자열이며 논리 Type ID는 `contentEmbedding`이다.
+삭제·부재 콘텐츠에는 발행하지 않는다. 기존 `content-search-sync` 계약과 그룹은 유지한다.
+
+일반 Listener는 Embedding 이벤트 발행 ACK를 확인한 뒤 정상 반환한다.
+동기 전송 오류, Future 실패, ACK timeout, 인터럽트는 원본 처리 실패로 전파한다.
+인터럽트 상태는 복원한다. ACK 후 원본 Offset 커밋 전에 종료되거나 timeout 뒤
+늦은 ACK가 도착하면 요청이 중복될 수 있다. ES와 Kafka 사이의 exactly-once는 보장하지 않는다.
+
+전용 Consumer는 최신 활성 콘텐츠를 DB에서 읽고 `ContentEmbeddingIndexer.indexForKafka()`를
+호출한다. 기존 Hash·모델 검사와 조건부 벡터 업데이트(no upsert)를 재사용한다.
+AI 호출·ES 조회/저장 실패는 Kafka 오류 처리로 전파하며, 기존 `index()`의 best-effort와
+Backfill의 실패 집계·중단 정책은 유지한다. 최신 벡터, Hash 불일치, 문서 부재/삭제 등
+기존 생략 조건도 유지하므로 필요 시 `SYNC_DATA`와 `EMBEDDING_BACKFILL`로 보완한다.
+
+### PR1 과도기 오류 정책
+
+두 Listener는 기존 `kafkaListenerContainerFactory`와 공통 `DefaultErrorHandler`를 사용한다.
+기본 재시도는 1000ms 간격 추가 3회이며, 재시도 가능한 오류가 소진되면 해당 파티션을
+중지하고 Offset을 보존한다. Embedding 파티션이 중지되어도 일반 Topic의 소비는 계속된다.
+일반 색인 후 Kafka 발행 자체가 실패하면 일반 Topic 쪽 재시도·중지가 발생한다.
+
+PR1에는 DLT·오류 분류(PR2), 자동 재개(PR3), 통계 정합성 변경(#14)이 없다.
+장애를 해결한 후 기존처럼 파티션을 수동 재개하거나 서버를 재시작한다.
+장기 중지 시 원본 Topic retention을 넘기지 않도록 확인한다.
+
+### 설정
+
+아래 값은 코드의 기본값이며 Spring 외부 설정으로 변경할 수 있다.
+Embedding Producer만 별도 Factory/Template을 사용하므로 기존 API·Batch Producer의
+timeout은 변경되지 않는다. 일반 Consumer의 poll 설정도 변경하지 않는다.
+
+| 설정 | 기본값 | 용도 |
+| --- | --- | --- |
+| `mopl.kafka.embedding.partitions` | 1 | 신규 `content-embedding` Topic 파티션 수 |
+| `mopl.kafka.embedding.replicas` | 1 | 신규 Topic 복제 수. 운영 브로커 구성에 맞춰 설정 |
+| `mopl.kafka.embedding.group-id` | `mopl-content-embedding-group` | Embedding 전용 그룹 |
+| `mopl.kafka.embedding.concurrency` | 1 | Embedding Listener 동시성 |
+| `mopl.kafka.embedding.max-poll-records` | 1 | Embedding Consumer의 poll당 최대 레코드 수 |
+| `mopl.kafka.embedding.max-poll-interval-ms` | 300000 | Embedding Consumer poll 간 최대 간격 |
+| `mopl.kafka.embedding.producer.max-block-ms` | 3000 | `send()` 내부 메타데이터·버퍼 대기 제한 |
+| `mopl.kafka.embedding.producer.request-timeout-ms` | 5000 | 브로커 요청 응답 대기 |
+| `mopl.kafka.embedding.producer.delivery-timeout-ms` | 10000 | Producer 전송 완료 제한 |
+| `mopl.kafka.embedding.producer.ack-timeout-ms` | 15000 | `send()` 반환 후 Future 완료 대기 |
+
+Producer의 `linger.ms`는 0이며 `delivery.timeout.ms >= request.timeout.ms`여야 한다.
+ACK timeout은 `send()` 자체의 대기를 포함하지 않는다. 기본 설정에서 두 대기 구간은
+각각 최대 3초와 15초다. ACK timeout 후 Future를 취소해도 브로커의 늦은 기록을
+취소할 수 있다고 가정하지 않으며, 원본 재처리로 인한 중복을 허용한다.
+
+Embedding Listener는 `auto.offset.reset=earliest`를 명시한다. 기존 committed offset이
+있으면 그 위치에서 계속하며, 신규 그룹은 시작 전 쌓인 요청도 처리한다.
+Spring Kafka 3.3.16의 `@KafkaListener(properties=...)`가 Factory의 Consumer 속성을
+Listener별로 덮어쓰는 기능을 사용한다. `max.poll.records`도 이 경로로 설정하며
+공통 ConsumerFactory의 설정은 변경하지 않는다.
+[공식 문서](https://docs.spring.io/spring-kafka/reference/3.3/kafka/receiving-messages/listener-annotation.html#annotation-properties)
+
+기존 일반 Topic의 파티션 수는 이 변경으로 조정하지 않는다. 신규 Topic은 KafkaAdmin이
+생성·관리하므로 필요한 권한을 확인하고, 기존 Topic의 파티션 설정 변경은 별도 운영 작업으로
+판단한다. 병렬도를 늘릴 때는 Topic 파티션 수, 인스턴스 수, OpenAI 제한을 함께 고려한다.
+
+### AI 비활성 및 다시 활성화할 때
+
+`AiAvailability`가 비활성 또는 API Key 누락을 판단하면 일반 색인은 계속하지만
+Embedding 이벤트는 발행하지 않는다. 전용 Listener ID는 `content-embedding-consumer`이며,
+Bean은 등록되어도 `autoStartup=false`여서 backlog를 소비하지 않는다.
+비활성 Listener를 강제로 시작하더라도 메시지를 no-op ACK하지 않고 오류를 전파한다.
+
+`autoStartup`은 기동 시 평가되며 환경변수 변경을 자동 감지하지 않는다.
+현재 `AiAvailability` 설정도 기동 시 주입되므로 AI 활성 플래그·Key를 변경했다면
+설정을 적용하여 서버를 재시작하는 것이 기본 절차다. 이미 AI 사용 가능한 설정으로
+실행 중이고 운영자가 Listener만 정지한 경우에는 `KafkaListenerEndpointRegistry`에서
+해당 ID의 컨테이너를 명시적으로 시작할 수 있다. 이 PR은 시작 API나 자동 재개 기능을
+추가하지 않는다. 파티션 pause 상태라면 컨테이너 시작과 별개로 해당 파티션 재개가 필요하다.
+
+재활성화 후 기존 backlog는 전용 그룹의 Offset부터 처리한다. 비활성 기간에는 요청을
+발행하지 않았으므로 backlog 처리만으로 그 기간의 Embedding이 모두 복구되지는 않는다.
+일반 검색 문서의 동기화 상태를 확인한 뒤 기존 CLI의 `EMBEDDING_BACKFILL`을 실행한다.
+일반 색인 유실·Hash 불일치가 있으면 먼저 `SYNC_DATA`, 다음으로 Backfill을 실행한다.
+기존 CLI 운영 안내의 writer 동시 실행·모델 변경 제한을 지키고 결과의 실패·건너뜀·미처리
+건수를 확인한다. 실제 OpenAI를 호출하는 Backfill은 테스트 실행과 별개의 운영 작업이다.
