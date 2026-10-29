@@ -302,18 +302,21 @@ class ContentSearchSyncAfterCommitPublisherTest {
                 new ContentSearchSyncTarget(contentId, false)
         ));
 
+        TransactionSynchronization synchronization =
+                onlyRegisteredSynchronization();
         long startedAt = System.nanoTime();
+        long elapsedMillis;
         try {
-            onlyRegisteredSynchronization().afterCommit();
+            synchronization.afterCommit();
+            elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - startedAt
+            );
             assertThat(sendInterrupted.await(500, TimeUnit.MILLISECONDS))
                     .isTrue();
         } finally {
             releaseSend.countDown();
             blockingProducer.shutdownSendExecutor();
         }
-        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
-                System.nanoTime() - startedAt
-        );
 
         assertThat(sendStarted.await(100, TimeUnit.MILLISECONDS)).isTrue();
         assertThat(elapsedMillis).isLessThan(500L);
