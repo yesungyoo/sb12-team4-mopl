@@ -4,6 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.mopl.infrastructure.ai.exception.AiClientException;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.elasticsearch.NoSuchIndexException;
 import org.springframework.data.elasticsearch.RestStatusException;
 import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
@@ -11,6 +16,7 @@ import org.springframework.kafka.support.serializer.DeserializationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.web.client.HttpClientErrorException;
 
 class ContentSearchKafkaFailureClassifierTest {
@@ -26,6 +32,34 @@ class ContentSearchKafkaFailureClassifierTest {
                 .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_CONFIGURATION);
         assertThat(classifier.classify(aiFailure(429, "{\"error\":{\"message\":\"unknown\"}}")))
                 .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_AMBIGUOUS);
+    }
+
+    @Test
+    void keepsElasticsearch429PausedRegardlessOfResponseBody() {
+        RestStatusException failure = new RestStatusException(429, "rate_limit_exceeded");
+
+        assertThat(classifier.classify(failure))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_AMBIGUOUS);
+        assertThat(classifier.shouldSkipRetry(failure)).isTrue();
+        assertThat(classifier.classify(aiFailure(429, "{\"error\":{\"code\":\"rate_limit_exceeded\"}}")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+    }
+
+    @Test
+    void classifiesSpecificDatabaseResourceFailuresAsCommonWithoutBroadeningDataAccessFailures() {
+        assertThat(classifier.classify(new DataAccessResourceFailureException("resource unavailable")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+        assertThat(classifier.classify(new CannotGetJdbcConnectionException(
+                "Hikari connection acquisition timed out", new SQLTransientConnectionException("pool timeout")
+        ))).isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+        assertThat(classifier.classify(new SQLTransientConnectionException("connection timeout")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+        assertThat(classifier.classify(new SQLRecoverableException("connection lost")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+        assertThat(classifier.classify(new SQLException("communications failure", "08006")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT);
+        assertThat(classifier.classify(new DataIntegrityViolationException("duplicate content")))
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.RETRY_THEN_DLT);
     }
 
     @Test

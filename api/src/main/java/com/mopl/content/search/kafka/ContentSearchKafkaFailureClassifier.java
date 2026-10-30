@@ -3,16 +3,21 @@ package com.mopl.content.search.kafka;
 import com.mopl.infrastructure.ai.exception.AiClientException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
+import java.sql.SQLException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
 import java.util.concurrent.TimeoutException;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Set;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.elasticsearch.NoSuchIndexException;
 import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.RestStatusException;
 import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
@@ -24,6 +29,7 @@ public class ContentSearchKafkaFailureClassifier {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Throwable current = failure;
         boolean ambiguousElasticsearchFailure = false;
+        boolean dataAccessResourceFailure = false;
         while (current != null && visited.add(current)) {
             if (current instanceof DeserializationException) {
                 return FailureType.RECORD_PERMANENT;
@@ -33,6 +39,14 @@ public class ContentSearchKafkaFailureClassifier {
             }
             if (current instanceof NoSuchIndexException || current instanceof ResourceNotFoundException) {
                 return FailureType.COMMON_CONFIGURATION;
+            }
+            if (current instanceof org.springframework.data.elasticsearch.ResourceFailureException) {
+                return FailureType.COMMON_TRANSIENT;
+            }
+            if (current instanceof DataAccessResourceFailureException) {
+                dataAccessResourceFailure = true;
+                current = current.getCause();
+                continue;
             }
             if (current instanceof AiClientException aiFailure) {
                 FailureType type = classifyAiFailure(aiFailure);
@@ -58,6 +72,7 @@ public class ContentSearchKafkaFailureClassifier {
                     || current instanceof TimeoutException
                     || current instanceof org.apache.kafka.common.errors.TimeoutException
                     || current instanceof InterruptedException
+                    || isDatabaseConnectionFailure(current)
                     || isNetworkFailure(current)) {
                 return FailureType.COMMON_TRANSIENT;
             }
@@ -76,6 +91,9 @@ public class ContentSearchKafkaFailureClassifier {
                 return elasticsearchType;
             }
             current = current.getCause();
+        }
+        if (dataAccessResourceFailure) {
+            return FailureType.COMMON_TRANSIENT;
         }
         return ambiguousElasticsearchFailure ? FailureType.COMMON_AMBIGUOUS : FailureType.RETRY_THEN_DLT;
     }
@@ -102,6 +120,9 @@ public class ContentSearchKafkaFailureClassifier {
             return FailureType.COMMON_CONFIGURATION;
         }
         if (status == 429) {
+            if (!openAi) {
+                return FailureType.COMMON_AMBIGUOUS;
+            }
             if (containsAny(detail, "rate_limit_exceeded", "rate_limit_reached")) {
                 return FailureType.COMMON_TRANSIENT;
             }
@@ -130,6 +151,19 @@ public class ContentSearchKafkaFailureClassifier {
             return FailureType.COMMON_TRANSIENT;
         }
         return FailureType.RETRY_THEN_DLT;
+    }
+
+    private boolean isDatabaseConnectionFailure(Throwable failure) {
+        if (failure instanceof CannotGetJdbcConnectionException
+                || failure instanceof SQLTransientConnectionException
+                || failure instanceof SQLRecoverableException) {
+            return true;
+        }
+        if (failure instanceof SQLException sqlException) {
+            String sqlState = sqlException.getSQLState();
+            return sqlState != null && sqlState.startsWith("08");
+        }
+        return false;
     }
 
     private FailureType classifyElasticsearchFailure(Throwable failure) {

@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -66,8 +67,16 @@ public class DltReplayService {
 
         try (Consumer<byte[], byte[]> consumer = consumerFactory.createConsumer()) {
             consumer.assign(List.of(topicPartition));
-            consumer.seek(topicPartition, offset);
-            ConsumerRecord<byte[], byte[]> record = findSelectedRecord(consumer, topicPartition, offset);
+            ConsumerRecord<byte[], byte[]> record;
+            try {
+                consumer.seek(topicPartition, offset);
+                record = findSelectedRecord(consumer, topicPartition, offset);
+            } catch (OffsetOutOfRangeException exception) {
+                throw new IllegalArgumentException(
+                        "선택한 DLT offset이 Topic의 보존 범위를 벗어났습니다: " + offset,
+                        exception
+                );
+            }
             rejectUnresolvedDeserialization(record);
             return replayRecord(target, record);
         }

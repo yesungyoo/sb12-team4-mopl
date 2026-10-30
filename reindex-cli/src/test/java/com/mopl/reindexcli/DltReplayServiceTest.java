@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.BeforeEach;
@@ -198,6 +199,22 @@ class DltReplayServiceTest {
                 ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0, 13
         )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("선택한 DLT offset에 레코드가 없습니다");
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), any());
+    }
+
+    @Test
+    void replayMapsKafkaOffsetOutOfRangeToInvalidInputWithoutRepublishing() {
+        TopicPartition topicPartition = new TopicPartition(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0
+        );
+        when(consumer.poll(any(Duration.class))).thenThrow(new OffsetOutOfRangeException(
+                Map.of(topicPartition, 13L)
+        ));
+
+        assertThatThrownBy(() -> service.replay(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0, 13
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("보존 범위");
         verify(kafkaTemplate, never()).send(anyString(), anyString(), any());
     }
 
