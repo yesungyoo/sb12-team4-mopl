@@ -130,6 +130,14 @@ Embedding 모드는 같은 JAR 명령에서 모드만 바꾸고 `MOPL_AI_ENABLED
 | `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA` 또는 `EMBEDDING_BACKFILL`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. |
 | `3` | 위 설정 오류 이외의 기동 실패, DB 연결·Hibernate 스키마 검증 실패 또는 작업 전체로 전파된 DB·Elasticsearch 처리 예외 | 환경 변수의 값 형식, DB 스키마와 인프라 상태 및 원인 예외를 확인하고 복구한 뒤 같은 모드로 재실행합니다. |
 
+### DLT_REPLAY 종료 코드
+
+| 코드 | 의미 | 대응 |
+| --- | --- | --- |
+| `0` | 선택 레코드 재발행 ACK 확인 완료. 현재 DB에서 삭제되었거나 없는 Embedding 콘텐츠는 정상 건너뜀으로 종료될 수도 있음 | 로그의 `sent`와 `sourceTopic`, 콘텐츠 ID를 확인합니다. 건너뜀인 경우 현재 DB 삭제 상태를 확인합니다. |
+| `2` | 잘못된 입력, 범위 밖이거나 존재하지 않는 DLT Offset, 해결되지 않은 역직렬화 오류 등 재처리할 수 없는 레코드. 필수 Kafka bootstrap 설정 누락도 포함 | DLT Topic·Partition·Offset과 레코드의 Type ID·Key·Value·예외 헤더를 확인합니다. 잘못된 위치 또는 재처리 불가 레코드는 원인을 해결하기 전 재발행하지 않습니다. |
+| `3` | DLT 레코드 조회 중 Kafka 인프라 장애, DB 상태 조회 등 실행 중 인프라 예외 또는 원본 Topic 재발행 ACK 실패 | Kafka·DB 연결과 인증·권한, Producer 상태를 확인합니다. ACK timeout은 늦은 발행이 도착했을 수 있으므로 재실행 전에 원본 Topic을 확인해 중복 발행을 방지합니다. |
+
 `SYNC_DATA` 처리 중 발생한 예외는 종료 코드 `3`입니다. Backfill에서는 개별 Embedding 생성 실패나 개별 Elasticsearch 업데이트 실패를 집계해 종료 코드 `1`로 반환하지만, Elasticsearch Scroll 조회, MySQL 배치 조회 또는 마지막 Refresh처럼 작업 전체로 전파된 예외는 종료 코드 `3`입니다.
 
 종료 코드 `0`/`1`/`2`/`3`은 위와 같이 JAR를 직접 실행한 직후의 `$LASTEXITCODE`로 확인합니다. 이후 다른 외부 명령을 실행하면 값이 바뀔 수 있으므로 바로 별도 변수에 보관하세요. 필요하면 호출 스크립트도 같은 코드로 종료합니다.

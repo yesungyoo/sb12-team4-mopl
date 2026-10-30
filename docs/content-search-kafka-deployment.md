@@ -62,14 +62,19 @@ Producer 설정은 변경하지 않는다. 완료 대기 시간은 메타데이�
 두 설정이 모두 있으면 `retry-max-retries`를 우선 적용한다.
 
 Issue #15 PR2 이후 콘텐츠 일반 색인과 Embedding은 각각 전용 ErrorHandler를 사용한다.
-명확한 콘텐츠 레코드 오류는 재시도 없이 DLT로 이동하고, 일반 원인 불명 오류는
-기본 1초 간격 3회 추가 재시도 후 DLT로 이동한다. Elasticsearch/OpenAI 연결·서비스
-장애는 재시도 후 해당 Consumer 파티션을 중지하고 Offset을 유지한다. 인증·권한·설정
-장애와 원인 불명 ES 400/OpenAI 429는 불필요한 재시도 없이 파티션을 중지한다.
-다른 Listener와 Batch는 기존 공통 ErrorHandler를 계속 사용한다.
+Elasticsearch의 레코드 파싱 오류처럼 개별 레코드의 영구 오류는 재시도 없이 DLT로
+이동한다. 그 밖의 레코드별·원인 불명 오류는 기본 1초 간격 3회 추가 재시도 후 DLT로
+이동한다. Elasticsearch I/O 연결 오류와 MySQL 연결 장애는 기본 1초 간격 3회 추가
+재시도한 뒤 해당 Consumer 파티션을 Pause하고 Offset을 유지한다.
+
+Elasticsearch 429는 응답 본문과 관계없이 불필요한 재시도 없이 즉시 파티션을 Pause한다.
+OpenAI 429는 응답 본문을 확인해 분류한다. rate limit 응답은 유한 재시도 후 파티션을
+Pause하고, quota 오류와 원인 불명 응답은 재시도 없이 Pause한다. 인덱스 부재, 인증·권한·
+설정 장애와 원인 불명 Elasticsearch 400도 파티션을 Pause하고 Offset을 유지한다. 다른
+Listener와 Batch는 기존 공통 ErrorHandler를 계속 사용한다.
 
 DLT 브로커 ACK를 확인한 뒤에만 원본 Offset이 진행된다. DLT 발행 예외·실패·timeout이면
-기존 `KafkaListenerFailureRecoverer`로 해당 파티션을 중지하고 원본 Offset을 보존한다.
+기존 `KafkaListenerFailureRecoverer`로 해당 파티션을 Pause하고 원본 Offset을 보존한다.
 timeout 직후 늦은 브로커 ACK가 도착하면 재개 후 같은 DLT 레코드가 중복될 수 있으므로
 중복을 허용하고 DLT와 원본의 Key·offset을 대조한다.
 
