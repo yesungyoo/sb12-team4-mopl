@@ -73,6 +73,9 @@ Pause하고, quota 오류와 원인 불명 응답은 재시도 없이 Pause한�
 설정 장애와 원인 불명 Elasticsearch 400도 파티션을 Pause하고 Offset을 유지한다. 다른
 Listener와 Batch는 기존 공통 ErrorHandler를 계속 사용한다.
 
+Elasticsearch와 OpenAI의 HTTP 408 및 500/502/503/504 오류는 기본 1초 간격 3회 추가
+재시도한 뒤 해당 Consumer 파티션을 Pause하고 Offset을 유지한다.
+
 DLT 브로커 ACK를 확인한 뒤에만 원본 Offset이 진행된다. DLT 발행 예외·실패·timeout이면
 기존 `KafkaListenerFailureRecoverer`로 해당 파티션을 Pause하고 원본 Offset을 보존한다.
 timeout 직후 늦은 브로커 ACK가 도착하면 재개 후 같은 DLT 레코드가 중복될 수 있으므로
@@ -255,7 +258,8 @@ Listener별로 덮어쓰는 기능을 사용한다. `max.poll.records`도 이 �
 `AiAvailability`가 비활성 또는 API Key 누락을 판단하면 일반 색인은 계속하지만
 Embedding 이벤트는 발행하지 않는다. 전용 Listener ID는 `content-embedding-consumer`이며,
 Bean은 등록되어도 `autoStartup=false`여서 backlog를 소비하지 않는다.
-비활성 Listener를 강제로 시작하더라도 메시지를 no-op ACK하지 않고 오류를 전파한다.
+비활성 Listener를 수동으로 시작하더라도 `AiUnavailableException`이 발생해 해당 파티션을
+즉시 Pause하고 Offset을 보존한다. 메시지를 no-op ACK하거나 DLT로 보내지 않는다.
 
 `autoStartup`은 기동 시 평가되며 환경변수 변경을 자동 감지하지 않는다.
 현재 `AiAvailability` 설정도 기동 시 주입되므로 AI 활성 플래그·Key를 변경했다면

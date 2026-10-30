@@ -127,7 +127,7 @@ Embedding 모드는 같은 JAR 명령에서 모드만 바꾸고 `MOPL_AI_ENABLED
 | --- | --- | --- |
 | `0` | 선택한 작업이 실패 또는 미처리 없이 끝남 | Backfill의 `skipped`에는 `STALE_REJECTED`뿐 아니라 이미 최신인 문서, Elasticsearch 문서 없음, MySQL에서 찾을 수 없거나 삭제된 콘텐츠 등이 포함됩니다. `STALE_REJECTED`는 OpenAI 호출 전 hash 확인 단계와 생성 후 조건부 저장 단계 모두에서 발생할 수 있습니다. 따라서 종료 코드 `0`만으로 전체 문서의 embedding 정합성을 단정하지 말고 실행 요약과 실제 stale 로그를 확인하세요. |
 | `1` | Embedding Backfill에서 한 건 이상 실패·미처리가 발생했거나 조기 중단됨 | 실행 로그의 성공·실패·건너뜀·미처리 수와 중단 사유를 확인합니다. OpenAI 401/403이면 Key와 권한을 수정하고, 연속 실패 중단이면 장애 원인을 해결한 뒤 다시 실행합니다. |
-| `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA` 또는 `EMBEDDING_BACKFILL`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. |
+| `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA`, `EMBEDDING_BACKFILL` 또는 `DLT_REPLAY`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. DLT_REPLAY이면 DLT Topic·Partition·Offset과 재처리 가능한 레코드인지 확인합니다. |
 | `3` | 위 설정 오류 이외의 기동 실패, DB 연결·Hibernate 스키마 검증 실패 또는 작업 전체로 전파된 DB·Elasticsearch 처리 예외 | 환경 변수의 값 형식, DB 스키마와 인프라 상태 및 원인 예외를 확인하고 복구한 뒤 같은 모드로 재실행합니다. |
 
 ### DLT_REPLAY 종료 코드
