@@ -20,12 +20,16 @@ import org.springframework.stereotype.Component;
 )
 public class ContentSearchSyncKafkaConsumer {
 
+    public static final String LISTENER_ID = "content-search-sync-consumer";
+
     private final ContentRepository contentRepository;
     private final ContentSearchIndexer contentSearchIndexer;
     private final ContentEmbeddingKafkaProducer contentEmbeddingKafkaProducer;
     private final AiAvailability aiAvailability;
 
     @KafkaListener(
+            id = LISTENER_ID,
+            groupId = "${spring.kafka.consumer.group-id:mopl-group}",
             topics = ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
             containerFactory = "contentSearchSyncKafkaListenerContainerFactory",
             properties = "spring.json.remove.type.headers=false"

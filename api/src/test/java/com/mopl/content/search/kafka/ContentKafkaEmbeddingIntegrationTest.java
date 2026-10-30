@@ -1,10 +1,12 @@
 package com.mopl.content.search.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -28,18 +30,31 @@ import com.mopl.infrastructure.ai.client.EmbeddingClient;
 import com.mopl.infrastructure.ai.dto.EmbeddingRequest;
 import com.mopl.infrastructure.ai.dto.EmbeddingResponse;
 import com.mopl.infrastructure.ai.exception.AiClientException;
+import eu.rekawek.toxiproxy.model.Toxic;
+import eu.rekawek.toxiproxy.model.ToxicDirection;
+import eu.rekawek.toxiproxy.model.ToxicList;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -58,11 +73,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.env.Environment;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.support.KafkaHeaders;
@@ -77,6 +96,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -85,12 +106,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "spring.data.redis.host=localhost",
         "spring.data.redis.port=6379",
         "spring.kafka.consumer.group-id=content-search-embedding-it",
+        "spring.datasource.hikari.connection-timeout=2500",
+        "spring.datasource.hikari.data-source-properties.connectTimeout=2000",
+        "spring.datasource.hikari.data-source-properties.socketTimeout=2000",
         "mopl.kafka.embedding.group-id=content-embedding-it",
         "mopl.kafka.consumer.retry-interval-ms=100",
         "mopl.kafka.consumer.retry-max-retries=2",
         "mopl.kafka.dlt.producer.request-timeout-ms=100",
         "mopl.kafka.dlt.producer.delivery-timeout-ms=200",
         "mopl.kafka.dlt.producer.ack-timeout-ms=300",
+        "mopl.kafka.auto-resume.probe-interval-ms=100",
+        "mopl.kafka.auto-resume.probe-timeout-ms=2000",
+        "mopl.kafka.auto-resume.consecutive-successes=3",
+        "mopl.kafka.auto-resume.minimum-pause-ms=100",
         "mopl.ai.enabled=true",
         "ai.openai.api-key=test-key",
         "ai.openai.embedding-model=text-embedding-3-small",
@@ -106,27 +134,49 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class ContentKafkaEmbeddingIntegrationTest {
 
+    private static final Logger log = LoggerFactory.getLogger(ContentKafkaEmbeddingIntegrationTest.class);
     private static final String SEARCH_GROUP = "content-search-embedding-it";
     private static final String EMBEDDING_GROUP = "content-embedding-it";
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration ELASTICSEARCH_READINESS_TIMEOUT = Duration.ofSeconds(60);
+    private static final Duration DEPENDENCY_READINESS_TIMEOUT = Duration.ofSeconds(30);
+    private static final HttpClient ELASTICSEARCH_HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build();
+    private static final Network TEST_NETWORK = Network.SHARED;
+
+    private static ToxiproxyContainer.ContainerProxy elasticsearchProxy;
+    private static ToxiproxyContainer.ContainerProxy mysqlProxy;
 
     @Container
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
             .withDatabaseName("mopl").withUsername("mopl").withPassword("mopl")
+            .withNetwork(TEST_NETWORK)
+            .withNetworkAliases("mopl-kafka-it-mysql")
             .withStartupTimeout(Duration.ofMinutes(5));
 
     @Container
     static final ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
             "docker.elastic.co/elasticsearch/elasticsearch:8.18.8")
             .withEnv("xpack.security.enabled", "false")
+            .withNetwork(TEST_NETWORK)
+            .withNetworkAliases("mopl-kafka-it-elasticsearch")
             .withStartupTimeout(Duration.ofMinutes(5));
+
+    @Container
+    static final ToxiproxyContainer TOXIPROXY = new ToxiproxyContainer("ghcr.io/shopify/toxiproxy:2.5.0")
+            .withNetwork(TEST_NETWORK);
 
     @Autowired private ContentRepository contentRepository;
     @Autowired private ContentSearchRepository searchRepository;
     @MockitoSpyBean private ContentSearchIndexer contentSearchIndexer;
     @MockitoSpyBean private ContentEmbeddingIndexer contentEmbeddingIndexer;
+    @MockitoSpyBean private ElasticsearchKafkaHealthProbe elasticsearchHealthProbe;
+    @MockitoSpyBean private MySqlKafkaHealthProbe mySqlHealthProbe;
     @Autowired private KafkaListenerEndpointRegistry registry;
+    @MockitoSpyBean private ContentSearchKafkaAutoResumeCoordinator autoResumeCoordinator;
     @Autowired private EmbeddedKafkaBroker broker;
+    @Autowired private Environment environment;
 
     @Autowired
     @Qualifier("kafkaTemplate")
@@ -148,10 +198,10 @@ class ContentKafkaEmbeddingIntegrationTest {
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry properties) {
-        properties.add("spring.datasource.url", MYSQL::getJdbcUrl);
+        properties.add("spring.datasource.url", ContentKafkaEmbeddingIntegrationTest::proxiedMysqlJdbcUrl);
         properties.add("spring.datasource.username", MYSQL::getUsername);
         properties.add("spring.datasource.password", MYSQL::getPassword);
-        properties.add("spring.elasticsearch.uris", ELASTICSEARCH::getHttpHostAddress);
+        properties.add("spring.elasticsearch.uris", ContentKafkaEmbeddingIntegrationTest::proxiedElasticsearchUri);
     }
 
     @BeforeEach
@@ -161,6 +211,10 @@ class ContentKafkaEmbeddingIntegrationTest {
         searchRepository.deleteAll();
         contentRepository.deleteAllInBatch();
         when(embeddingClient.embed(any(EmbeddingRequest.class))).thenReturn(vector(0.01D));
+        doThrow(new IllegalStateException("ES probe disabled for isolated test"))
+                .when(elasticsearchHealthProbe).checkHealthy();
+        doThrow(new IllegalStateException("MySQL probe disabled for isolated test"))
+                .when(mySqlHealthProbe).checkHealthy();
     }
 
     @AfterEach
@@ -168,6 +222,21 @@ class ContentKafkaEmbeddingIntegrationTest {
         if (admin != null) {
             admin.close(Duration.ofSeconds(5));
         }
+    }
+
+    @Test
+    void searchListenerUsesConfiguredGroupIndependentlyFromListenerId() throws Exception {
+        MessageListenerContainer listener = searchListener();
+
+        assertThat(registry.getListenerContainer(ContentSearchSyncKafkaConsumer.LISTENER_ID))
+                .isSameAs(listener);
+        assertThat(listener.getContainerProperties().getGroupId()).isEqualTo(SEARCH_GROUP);
+
+        var groupDescription = admin.describeConsumerGroups(Collections.singletonList(SEARCH_GROUP))
+                .all()
+                .get(10, TimeUnit.SECONDS)
+                .get(SEARCH_GROUP);
+        assertThat(groupDescription.members()).isNotEmpty();
     }
 
     @Test
@@ -237,6 +306,8 @@ class ContentKafkaEmbeddingIntegrationTest {
 
     @Test
     void exhaustedEmbeddingPausesOnlyEmbeddingPartitionAndKeepsOffset() throws Exception {
+        doCallRealMethod().when(elasticsearchHealthProbe).checkHealthy();
+        doCallRealMethod().when(mySqlHealthProbe).checkHealthy();
         when(embeddingClient.embed(any(EmbeddingRequest.class)))
                 .thenThrow(new AiClientException("unavailable", 503, null));
         Content first = saveContent("failing embedding");
@@ -249,6 +320,7 @@ class ContentKafkaEmbeddingIntegrationTest {
         awaitSearchCommit(sendSearch(second, false));
         assertThat(document(second).getTitle()).isEqualTo(second.getTitle());
         verify(embeddingClient, times(3)).embed(any(EmbeddingRequest.class));
+        assertRemainsPausedAfterHealthyProbes(embeddingListener(), partition);
     }
 
     @Test
@@ -287,6 +359,8 @@ class ContentKafkaEmbeddingIntegrationTest {
     @EnumSource(DltPublishFailure.class)
     void failedEmbeddingDltPublishPausesPartitionAndPreservesSourceOffset(DltPublishFailure failure)
             throws Exception {
+        doCallRealMethod().when(elasticsearchHealthProbe).checkHealthy();
+        doCallRealMethod().when(mySqlHealthProbe).checkHealthy();
         MessageListenerContainer search = searchListener();
         search.stop();
 
@@ -307,6 +381,7 @@ class ContentKafkaEmbeddingIntegrationTest {
         assertOffsetPreserved(EMBEDDING_GROUP, sourceRecord, sourcePartition, embeddingListener());
         verify(dltTemplate, times(1)).send(any(ProducerRecord.class));
         verify(embeddingClient, times(3)).embed(any(EmbeddingRequest.class));
+        assertRemainsPausedAfterHealthyProbes(embeddingListener(), sourcePartition);
         org.mockito.Mockito.reset(dltTemplate);
         embeddingListener().resumePartition(sourcePartition);
         await(() -> committedOffset(EMBEDDING_GROUP, sourceRecord.topic()) > sourceRecord.offset());
@@ -316,6 +391,8 @@ class ContentKafkaEmbeddingIntegrationTest {
     @EnumSource(DltPublishFailure.class)
     void failedSearchDltPublishPausesOnlySearchPartitionAndPreservesSourceOffset(DltPublishFailure failure)
             throws Exception {
+        doCallRealMethod().when(elasticsearchHealthProbe).checkHealthy();
+        doCallRealMethod().when(mySqlHealthProbe).checkHealthy();
         Content content = saveContent("search DLT ACK failure " + failure);
         doThrow(new IllegalStateException("unclassified search record failure"))
                 .when(contentSearchIndexer).index(any(Content.class));
@@ -333,6 +410,7 @@ class ContentKafkaEmbeddingIntegrationTest {
         assertThat(embeddingListener().isPartitionPaused(
                 new TopicPartition(ContentSearchKafkaTopics.CONTENT_EMBEDDING, 0))).isFalse();
         verify(dltTemplate, times(1)).send(any(ProducerRecord.class));
+        assertRemainsPausedAfterHealthyProbes(searchListener(), partition);
         org.mockito.Mockito.reset(dltTemplate);
         searchListener().resumePartition(partition);
         await(() -> committedOffset(SEARCH_GROUP, source.topic()) > source.offset());
@@ -366,6 +444,148 @@ class ContentKafkaEmbeddingIntegrationTest {
         assertOffsetPreserved(EMBEDDING_GROUP, embeddingSource, embeddingPartition, embeddingListener());
         assertThat(searchListener().isPartitionPaused(embeddingPartition)).isFalse();
         assertThat(embeddingListener().isPartitionPaused(searchPartition)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(SharedDependencyOutage.class)
+    void recoversSharedDependencyOutageAndReprocessesPausedRecords(SharedDependencyOutage dependency)
+            throws Exception {
+        Content content = saveContent("automatic recovery " + dependency);
+        String elasticsearchClientEndpoint = environment.getRequiredProperty("spring.elasticsearch.uris");
+        String elasticsearchProxyEndpoint = proxiedElasticsearchUri();
+        assertThat(elasticsearchClientEndpoint).isEqualTo(elasticsearchProxyEndpoint);
+        if (dependency == SharedDependencyOutage.ELASTICSEARCH) {
+            assertThat(ELASTICSEARCH.isRunning()).isTrue();
+            assertThat(awaitElasticsearchReadiness("before outage", ELASTICSEARCH_READINESS_TIMEOUT)).isTrue();
+        }
+        if (dependency == SharedDependencyOutage.ELASTICSEARCH) {
+            doCallRealMethod().when(elasticsearchHealthProbe).checkHealthy();
+        } else {
+            doCallRealMethod().when(mySqlHealthProbe).checkHealthy();
+        }
+
+        ToxiproxyContainer.ContainerProxy dependencyProxy = dependency == SharedDependencyOutage.ELASTICSEARCH
+                ? getElasticsearchProxy()
+                : getMysqlProxy();
+        List<Toxic> connectionResetToxics = List.of();
+        RecordMetadata searchSource = null;
+        RecordMetadata embeddingSource = null;
+        Map<String, AtomicLong> recovererStartedAt = new ConcurrentHashMap<>();
+        Map<String, ContentSearchKafkaFailureClassifier.FailureClassification> recovererClassifications =
+                new ConcurrentHashMap<>();
+        Throwable testFailure = null;
+        doAnswer(invocation -> {
+            String listenerId = invocation.getArgument(0);
+            ContentSearchKafkaAutoResumeCoordinator.PauseReason pauseReason = invocation.getArgument(3);
+            if (pauseReason == ContentSearchKafkaAutoResumeCoordinator.PauseReason.COMMON_TRANSIENT) {
+                recovererStartedAt.computeIfAbsent(listenerId, ignored -> new AtomicLong())
+                        .set(System.nanoTime());
+                recovererClassifications.put(listenerId, invocation.getArgument(4));
+            }
+            return invocation.callRealMethod();
+        }).when(autoResumeCoordinator).recordFailure(
+                any(String.class), any(TopicPartition.class), anyLong(),
+                any(ContentSearchKafkaAutoResumeCoordinator.PauseReason.class),
+                any(ContentSearchKafkaFailureClassifier.FailureClassification.class));
+        try {
+            assertThat(dependency == SharedDependencyOutage.ELASTICSEARCH
+                    ? ELASTICSEARCH.isRunning()
+                    : MYSQL.isRunning()).isTrue();
+            connectionResetToxics = resetExistingConnections(dependencyProxy, "outage-reset");
+            if (dependency == SharedDependencyOutage.ELASTICSEARCH) {
+                assertThat(elasticsearchHttpResponds(Duration.ofSeconds(3)))
+                        .as("Toxiproxy 차단 중 실제 Elasticsearch HTTP 요청이 실패해야 함")
+                        .isFalse();
+                assertThatThrownBy(() -> elasticsearchHealthProbe.checkHealthy())
+                        .as("Toxiproxy 차단 중 Elasticsearch Health Probe가 실패해야 함")
+                        .isInstanceOf(RuntimeException.class);
+            } else {
+                assertThatThrownBy(() -> mySqlHealthProbe.checkHealthy())
+                        .as("Toxiproxy 차단 중 MySQL Health Probe가 실패해야 함")
+                        .isInstanceOf(RuntimeException.class);
+            }
+
+            long outageStartedAt = System.nanoTime();
+            searchSource = sendSearch(content, false);
+            embeddingSource = embeddingTemplate.send(
+                    ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                    content.getId().toString(),
+                    new ContentEmbeddingKafkaEvent(content.getId())
+            ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+            TopicPartition searchPartition = new TopicPartition(searchSource.topic(), searchSource.partition());
+            TopicPartition embeddingPartition = new TopicPartition(embeddingSource.topic(), embeddingSource.partition());
+
+            awaitOutagePartitionsPaused(
+                    dependency, searchPartition, embeddingPartition, outageStartedAt, recovererStartedAt);
+            assertOffsetPreserved(SEARCH_GROUP, searchSource, searchPartition, searchListener());
+            assertOffsetPreserved(EMBEDDING_GROUP, embeddingSource, embeddingPartition, embeddingListener());
+
+            if (dependency == SharedDependencyOutage.ELASTICSEARCH) {
+                removeToxics(connectionResetToxics);
+                connectionResetToxics = List.of();
+                assertThat(environment.getRequiredProperty("spring.elasticsearch.uris"))
+                        .isEqualTo(elasticsearchProxyEndpoint);
+                assertThat(awaitElasticsearchReadiness("after network recovery", ELASTICSEARCH_READINESS_TIMEOUT))
+                        .as("연결 복구 후 Elasticsearch HTTP readiness 실패: endpoint=%s", elasticsearchProxyEndpoint)
+                        .isTrue();
+            } else {
+                removeToxics(connectionResetToxics);
+                connectionResetToxics = List.of();
+                assertThat(awaitMySqlReadiness(DEPENDENCY_READINESS_TIMEOUT))
+                        .as("Toxiproxy 연결 복구 후 MySQL Health Probe가 정상화되지 않음")
+                        .isTrue();
+            }
+
+            RecordMetadata finalSearchSource = searchSource;
+            RecordMetadata finalEmbeddingSource = embeddingSource;
+            long elasticsearchProbeBaseline = probeInvocationCount(elasticsearchHealthProbe, "checkHealthy");
+            long mysqlProbeBaseline = probeInvocationCount(mySqlHealthProbe, "checkHealthy");
+            awaitLong(() -> committedOffset(SEARCH_GROUP, finalSearchSource.topic()) > finalSearchSource.offset()
+                            && committedOffset(EMBEDDING_GROUP, finalEmbeddingSource.topic())
+                            > finalEmbeddingSource.offset()
+                            && hasEmbedding(content),
+                    () -> recoveryDiagnostics(
+                            content,
+                            finalSearchSource,
+                            finalEmbeddingSource,
+                            recovererClassifications,
+                            elasticsearchProbeBaseline,
+                            mysqlProbeBaseline
+                    ));
+            assertThat(searchListener().isPartitionPaused(
+                    new TopicPartition(searchSource.topic(), searchSource.partition()))).isFalse();
+            assertThat(embeddingListener().isPartitionPaused(
+                    new TopicPartition(embeddingSource.topic(), embeddingSource.partition()))).isFalse();
+            assertThat(document(content).getEmbeddingInputHash()).isEqualTo(document(content).getContentInputHash());
+        } catch (Exception | Error failure) {
+            testFailure = failure;
+            throw failure;
+        } finally {
+            RuntimeException cleanupFailure = restoreDependencyAfterOutage(dependency, connectionResetToxics);
+            if (cleanupFailure != null) {
+                if (testFailure != null) {
+                    testFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw cleanupFailure;
+                }
+            }
+        }
+    }
+
+    @Test
+    void toxicCleanupAttemptsEveryEntryAndRetainsFailuresForRetry() throws Exception {
+        Toxic failingToxic = mock(Toxic.class);
+        Toxic succeedingToxic = mock(Toxic.class);
+        doThrow(new IOException("toxic removal failed")).when(failingToxic).remove();
+        List<Toxic> activeToxics = new ArrayList<>(List.of(failingToxic, succeedingToxic));
+
+        assertThatThrownBy(() -> removeToxics(activeToxics))
+                .isInstanceOf(IllegalStateException.class)
+                .satisfies(failure -> assertThat(failure.getSuppressed()).hasSize(1));
+
+        verify(failingToxic).remove();
+        verify(succeedingToxic).remove();
+        assertThat(activeToxics).containsExactly(failingToxic);
     }
 
     @Test
@@ -586,11 +806,7 @@ class ContentKafkaEmbeddingIntegrationTest {
     }
 
     private MessageListenerContainer searchListener() {
-        return registry.getListenerContainers().stream()
-                .filter(container -> container.getAssignedPartitions() != null
-                        && container.getAssignedPartitions().contains(
-                                new TopicPartition(ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC, 0)))
-                .findFirst().orElseThrow();
+        return registry.getListenerContainer(ContentSearchSyncKafkaConsumer.LISTENER_ID);
     }
 
     private long committedOffset(String group, String topic) {
@@ -699,6 +915,406 @@ class ContentKafkaEmbeddingIntegrationTest {
             Thread.sleep(50);
         }
         assertThat(condition.getAsBoolean()).as("비동기 Kafka 처리 완료").isTrue();
+    }
+
+    private void awaitOutagePartitionsPaused(
+            SharedDependencyOutage dependency,
+            TopicPartition searchPartition,
+            TopicPartition embeddingPartition,
+            long outageStartedAt,
+            Map<String, AtomicLong> recovererStartedAt
+    ) throws InterruptedException {
+        long deadline = outageStartedAt + TIMEOUT.toNanos();
+        PauseTimeline searchTimeline = new PauseTimeline();
+        PauseTimeline embeddingTimeline = new PauseTimeline();
+        PauseObservation searchObservation = null;
+        PauseObservation embeddingObservation = null;
+        while (System.nanoTime() < deadline
+                && (!searchTimeline.isPaused() || !embeddingTimeline.isPaused())) {
+            long observedAt = System.nanoTime();
+            searchObservation = observePartitionPause(
+                    ContentSearchSyncKafkaConsumer.LISTENER_ID, searchPartition);
+            embeddingObservation = observePartitionPause(
+                    ContentEmbeddingKafkaConsumer.LISTENER_ID, embeddingPartition);
+            observePauseTimeline("search", searchObservation, searchTimeline, outageStartedAt, observedAt);
+            observePauseTimeline("embedding", embeddingObservation, embeddingTimeline, outageStartedAt, observedAt);
+            if (!searchTimeline.isPaused() || !embeddingTimeline.isPaused()) {
+                Thread.sleep(50);
+            }
+        }
+
+        // Deadline 경계에서 비동기 Pause가 반영됐을 수 있으므로 마지막 상태를 반드시 다시 읽는다.
+        long finalObservedAt = System.nanoTime();
+        searchObservation = observePartitionPause(ContentSearchSyncKafkaConsumer.LISTENER_ID, searchPartition);
+        embeddingObservation = observePartitionPause(ContentEmbeddingKafkaConsumer.LISTENER_ID, embeddingPartition);
+        observePauseTimeline("search", searchObservation, searchTimeline, outageStartedAt, finalObservedAt);
+        observePauseTimeline("embedding", embeddingObservation, embeddingTimeline, outageStartedAt, finalObservedAt);
+
+        Long searchRecovererAfterMs = elapsedMillis(outageStartedAt,
+                recovererStartedAt.get(ContentSearchSyncKafkaConsumer.LISTENER_ID));
+        Long embeddingRecovererAfterMs = elapsedMillis(outageStartedAt,
+                recovererStartedAt.get(ContentEmbeddingKafkaConsumer.LISTENER_ID));
+        log.info("{} 장애 처리 단계(ms): 일반 색인 recoverer={}, pauseRequested={}, pauseApplied={}; "
+                        + "Embedding recoverer={}, pauseRequested={}, pauseApplied={}",
+                dependency, searchRecovererAfterMs, searchTimeline.pauseRequestedAfterMs,
+                searchTimeline.pauseAppliedAfterMs, embeddingRecovererAfterMs,
+                embeddingTimeline.pauseRequestedAfterMs, embeddingTimeline.pauseAppliedAfterMs);
+
+        assertThat(searchObservation.assigned() && searchObservation.paused()
+                && embeddingObservation.assigned() && embeddingObservation.paused())
+                .as("%s 장애 후 실제 Pause 반영 필요. 일반 색인=%s, Embedding=%s",
+                        dependency, searchObservation, embeddingObservation)
+                .isTrue();
+    }
+
+    private PauseObservation observePartitionPause(String listenerId, TopicPartition partition) {
+        MessageListenerContainer listener = registry.getListenerContainer(listenerId);
+        if (listener == null) {
+            return new PauseObservation(false, false, false, "listener-not-found");
+        }
+        MessageListenerContainer owner;
+        if (listener instanceof ConcurrentMessageListenerContainer<?, ?> concurrent) {
+            owner = concurrent.getContainers().stream()
+                    .filter(child -> child.getAssignedPartitions() != null
+                            && child.getAssignedPartitions().contains(partition))
+                    .findFirst().orElse(null);
+        } else {
+            owner = listener.getAssignedPartitions() != null
+                    && listener.getAssignedPartitions().contains(partition) ? listener : null;
+        }
+        if (owner == null) {
+            return new PauseObservation(false, false, false, listener.getClass().getSimpleName());
+        }
+        return new PauseObservation(
+                true,
+                owner.isPartitionPauseRequested(partition),
+                owner.isPartitionPaused(partition),
+                owner.getClass().getSimpleName());
+    }
+
+    private void observePauseTimeline(
+            String listenerName,
+            PauseObservation observation,
+            PauseTimeline timeline,
+            long outageStartedAt,
+            long observedAt
+    ) {
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(observedAt - outageStartedAt);
+        if (observation.assigned() && observation.pauseRequested()
+                && timeline.pauseRequestedAfterMs == null) {
+            timeline.pauseRequestedAfterMs = elapsedMs;
+            log.info("Kafka partition Pause 요청 관측: listener={}, assigned=true, elapsedMs={}, container={}",
+                    listenerName, elapsedMs, observation.containerType());
+        }
+        if (observation.assigned() && observation.paused() && timeline.pauseAppliedAfterMs == null) {
+            timeline.pauseAppliedAfterMs = elapsedMs;
+            log.info("Kafka partition 실제 Pause 반영 관측: listener={}, assigned=true, elapsedMs={}, container={}",
+                    listenerName, elapsedMs, observation.containerType());
+        }
+    }
+
+    private Long elapsedMillis(long startedAt, AtomicLong eventAt) {
+        return eventAt == null || eventAt.get() == 0
+                ? null
+                : TimeUnit.NANOSECONDS.toMillis(eventAt.get() - startedAt);
+    }
+
+    private record PauseObservation(boolean assigned, boolean pauseRequested, boolean paused, String containerType) {
+    }
+
+    private static final class PauseTimeline {
+        private Long pauseRequestedAfterMs;
+        private Long pauseAppliedAfterMs;
+
+        private boolean isPaused() {
+            return pauseAppliedAfterMs != null;
+        }
+    }
+
+    private static synchronized ToxiproxyContainer.ContainerProxy getElasticsearchProxy() {
+        if (elasticsearchProxy == null) {
+            elasticsearchProxy = TOXIPROXY.getProxy(ELASTICSEARCH, 9200);
+        }
+        return elasticsearchProxy;
+    }
+
+    private static List<Toxic> resetExistingConnections(
+            ToxiproxyContainer.ContainerProxy proxy,
+            String namePrefix
+    ) {
+        ToxicList toxics = proxy.toxics();
+        List<Toxic> activeToxics = new ArrayList<>(2);
+        try {
+            activeToxics.add(toxics.resetPeer(namePrefix + "-upstream", ToxicDirection.UPSTREAM, 0));
+            activeToxics.add(toxics.resetPeer(namePrefix + "-downstream", ToxicDirection.DOWNSTREAM, 0));
+            return activeToxics;
+        } catch (IOException exception) {
+            IllegalStateException injectionFailure =
+                    new IllegalStateException("Toxiproxy reset_peer 장애 주입 실패", exception);
+            try {
+                removeToxics(activeToxics);
+            } catch (RuntimeException cleanupFailure) {
+                injectionFailure.addSuppressed(cleanupFailure);
+            }
+            throw injectionFailure;
+        }
+    }
+
+    private static void removeToxics(List<Toxic> toxics) {
+        RuntimeException removalFailure = null;
+        var iterator = toxics.iterator();
+        while (iterator.hasNext()) {
+            Toxic toxic = iterator.next();
+            try {
+                toxic.remove();
+                iterator.remove();
+            } catch (IOException | RuntimeException exception) {
+                RuntimeException toxicFailure = new IllegalStateException(
+                        "Toxiproxy 장애 toxic 복원 실패: " + toxic.getName(), exception
+                );
+                if (removalFailure == null) {
+                    removalFailure = new IllegalStateException("하나 이상의 Toxiproxy toxic을 제거하지 못했습니다.");
+                }
+                removalFailure.addSuppressed(toxicFailure);
+            }
+        }
+        if (removalFailure != null) {
+            throw removalFailure;
+        }
+    }
+
+    private RuntimeException restoreDependencyAfterOutage(
+            SharedDependencyOutage dependency,
+            List<Toxic> activeToxics
+    ) {
+        RuntimeException cleanupFailure = null;
+        try {
+            removeToxics(activeToxics);
+        } catch (RuntimeException failure) {
+            cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+        }
+
+        if (dependency == SharedDependencyOutage.ELASTICSEARCH) {
+            if (!ELASTICSEARCH.isRunning()) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure,
+                        new AssertionError("ES Testcontainer가 정리 후 실행 중이 아닙니다."));
+            }
+            try {
+                if (!awaitElasticsearchReadiness("finally network cleanup", DEPENDENCY_READINESS_TIMEOUT)) {
+                    cleanupFailure = appendCleanupFailure(cleanupFailure,
+                            new AssertionError("후속 테스트 전에 Elasticsearch proxy endpoint 복구 실패: "
+                                    + proxiedElasticsearchUri()));
+                }
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            } catch (RuntimeException | AssertionError failure) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            }
+        } else {
+            if (!MYSQL.isRunning()) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure,
+                        new AssertionError("MySQL Testcontainer가 정리 후 실행 중이 아닙니다."));
+            }
+            try {
+                if (!awaitMySqlReadiness(DEPENDENCY_READINESS_TIMEOUT)) {
+                    cleanupFailure = appendCleanupFailure(cleanupFailure,
+                            new AssertionError("후속 테스트 전에 MySQL proxy endpoint 복구 실패: "
+                                    + jdbcProxyEndpoint()));
+                }
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            } catch (RuntimeException | AssertionError failure) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            }
+        }
+        return cleanupFailure;
+    }
+
+    private RuntimeException appendCleanupFailure(RuntimeException aggregate, Throwable failure) {
+        if (aggregate == null) {
+            return new IllegalStateException("Toxiproxy 장애 후 dependency 복구에 실패했습니다.", failure);
+        }
+        aggregate.addSuppressed(failure);
+        return aggregate;
+    }
+
+    private static synchronized ToxiproxyContainer.ContainerProxy getMysqlProxy() {
+        if (mysqlProxy == null) {
+            mysqlProxy = TOXIPROXY.getProxy(MYSQL, 3306);
+        }
+        return mysqlProxy;
+    }
+
+    private static String proxiedElasticsearchUri() {
+        ToxiproxyContainer.ContainerProxy proxy = getElasticsearchProxy();
+        return "http://" + proxy.getContainerIpAddress() + ":" + proxy.getProxyPort();
+    }
+
+    private static String proxiedMysqlJdbcUrl() {
+        String originalUrl = MYSQL.getJdbcUrl();
+        int authorityStart = originalUrl.indexOf("//") + 2;
+        int databasePathStart = originalUrl.indexOf('/', authorityStart);
+        ToxiproxyContainer.ContainerProxy proxy = getMysqlProxy();
+        String proxyAddress = proxy.getContainerIpAddress() + ":" + proxy.getProxyPort();
+        return originalUrl.substring(0, authorityStart) + proxyAddress + originalUrl.substring(databasePathStart);
+    }
+
+    private boolean awaitElasticsearchReadiness(String stage, Duration timeout) throws InterruptedException {
+        String endpoint = proxiedElasticsearchUri();
+        long deadline = System.nanoTime() + timeout.toNanos();
+        String lastResult = "request not attempted";
+        while (System.nanoTime() < deadline) {
+            try {
+                HttpResponse<Void> response = sendElasticsearchRootRequest(Duration.ofSeconds(2));
+                lastResult = "HTTP status=" + response.statusCode();
+                if (response.statusCode() == 200) {
+                    logElasticsearchState(stage, endpoint, lastResult);
+                    return true;
+                }
+            } catch (IOException | IllegalArgumentException exception) {
+                lastResult = "request exception=" + exceptionClassChain(exception);
+            }
+            Thread.sleep(250);
+        }
+        logElasticsearchState(stage + " readiness timeout", endpoint, lastResult);
+        return false;
+    }
+
+    private boolean elasticsearchHttpResponds(Duration timeout) {
+        try {
+            return sendElasticsearchRootRequest(timeout).statusCode() == 200;
+        } catch (IOException | InterruptedException | IllegalArgumentException exception) {
+            if (exception instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.info("Elasticsearch HTTP 장애 주입 확인: endpoint={}, causeTypes={}",
+                    proxiedElasticsearchUri(), exceptionClassChain(exception));
+            return false;
+        }
+    }
+
+    private HttpResponse<Void> sendElasticsearchRootRequest(Duration timeout)
+            throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(proxiedElasticsearchUri() + "/"))
+                .timeout(timeout)
+                .GET()
+                .build();
+        return ELASTICSEARCH_HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.discarding());
+    }
+
+    private boolean awaitMySqlReadiness(Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        String lastFailure = "probe not attempted";
+        while (System.nanoTime() < deadline) {
+            try {
+                mySqlHealthProbe.checkHealthy();
+                log.info("MySQL proxy readiness 성공: endpoint={}", jdbcProxyEndpoint());
+                return true;
+            } catch (RuntimeException exception) {
+                lastFailure = exceptionClassChain(exception);
+            }
+            Thread.sleep(250);
+        }
+        log.warn("MySQL proxy readiness timeout: endpoint={}, causeTypes={}", jdbcProxyEndpoint(), lastFailure);
+        return false;
+    }
+
+    private void logElasticsearchState(String stage, String endpoint, String readinessResult) {
+        String containerId = ELASTICSEARCH.getContainerId();
+        log.info("Elasticsearch 테스트 진단: stage={}, containerId={}, containerRunning={}, "
+                        + "containerEndpoint={}, clientAndProbeEndpoint={}, readiness={}",
+                stage, containerId, ELASTICSEARCH.isRunning(), ELASTICSEARCH.getHttpHostAddress(), endpoint,
+                readinessResult);
+    }
+
+    private String jdbcProxyEndpoint() {
+        ToxiproxyContainer.ContainerProxy proxy = getMysqlProxy();
+        return proxy.getContainerIpAddress() + ":" + proxy.getProxyPort();
+    }
+
+    private String exceptionClassChain(Throwable throwable) {
+        StringBuilder chain = new StringBuilder();
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (!chain.isEmpty()) {
+                chain.append(" -> ");
+            }
+            chain.append(current.getClass().getName());
+        }
+        return chain.toString();
+    }
+
+    private void awaitLong(BooleanSupplier condition) throws InterruptedException {
+        awaitLong(condition, () -> "진단 정보 없음");
+    }
+
+    private void awaitLong(BooleanSupplier condition, Supplier<String> diagnostics) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(condition.getAsBoolean())
+                .as("장애 복구 후 Kafka 자동 재처리 완료. %s", diagnostics.get())
+                .isTrue();
+    }
+
+    private String recoveryDiagnostics(
+            Content content,
+            RecordMetadata searchSource,
+            RecordMetadata embeddingSource,
+            Map<String, ContentSearchKafkaFailureClassifier.FailureClassification> recovererClassifications,
+            long elasticsearchProbeBaseline,
+            long mysqlProbeBaseline
+    ) {
+        String embeddingState;
+        try {
+            embeddingState = Boolean.toString(hasEmbedding(content));
+        } catch (RuntimeException exception) {
+            embeddingState = "unavailable:" + exception.getClass().getSimpleName();
+        }
+        return "searchCommitted=" + safeCommittedOffset(SEARCH_GROUP, searchSource.topic())
+                + ", embeddingCommitted=" + safeCommittedOffset(EMBEDDING_GROUP, embeddingSource.topic())
+                + ", hasEmbedding=" + embeddingState
+                + ", searchPause=" + observePartitionPause(
+                        ContentSearchSyncKafkaConsumer.LISTENER_ID,
+                        new TopicPartition(searchSource.topic(), searchSource.partition()))
+                + ", embeddingPause=" + observePartitionPause(
+                        ContentEmbeddingKafkaConsumer.LISTENER_ID,
+                        new TopicPartition(embeddingSource.topic(), embeddingSource.partition()))
+                + ", coordinatorTrackedPauses=" + autoResumeCoordinator.trackedPauseCount()
+                + ", recovererClassifications=" + recovererClassifications
+                + ", elasticsearchProbeCallsSinceRecovery="
+                        + (probeInvocationCount(elasticsearchHealthProbe, "checkHealthy") - elasticsearchProbeBaseline)
+                + ", mysqlProbeCallsSinceRecovery="
+                        + (probeInvocationCount(mySqlHealthProbe, "checkHealthy") - mysqlProbeBaseline);
+    }
+
+    private String safeCommittedOffset(String group, String topic) {
+        try {
+            return Long.toString(committedOffset(group, topic));
+        } catch (RuntimeException exception) {
+            return "unavailable:" + exception.getClass().getSimpleName();
+        }
+    }
+
+    private long probeInvocationCount(Object probeSpy, String methodName) {
+        return org.mockito.Mockito.mockingDetails(probeSpy).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals(methodName))
+                .count();
+    }
+
+    private void assertRemainsPausedAfterHealthyProbes(MessageListenerContainer listener, TopicPartition partition)
+            throws InterruptedException {
+        Thread.sleep(700);
+        assertThat(listener.isPartitionPaused(partition)).isTrue();
+    }
+
+    enum SharedDependencyOutage {
+        ELASTICSEARCH, MYSQL
     }
 
     enum PublishFailure {

@@ -81,13 +81,35 @@ DLT 브로커 ACK를 확인한 뒤에만 원본 Offset이 진행된다. DLT 발�
 timeout 직후 늦은 브로커 ACK가 도착하면 재개 후 같은 DLT 레코드가 중복될 수 있으므로
 중복을 허용하고 DLT와 원본의 Key·offset을 대조한다.
 
-공통 장애 파티션은 PR2에서 자동 재개하지 않는다. PR2는 runtime resume용 관리 API/JMX를
-추가하지 않으므로 기본 운영 절차는 장애 원인을 고친 뒤 원본 consumer group offset과 lag를
-기록하고 API 인스턴스를 재시작하는 것이다. 내부 관리 채널에서
-`KafkaListenerEndpointRegistry`를 이미 제어할 수 있는 경우에만 대상 Listener ID와
-TopicPartition을 확인해 파티션을 명시적으로 재개한다. 재개 뒤 같은 레코드가 재전달될 수
-있으므로 최신 DB 상태와 Elasticsearch 상태를 확인한다. 장기 중지 시 원본 Topic retention을
-넘기지 않도록 확인한다.
+PR3는 원인이 명확한 Elasticsearch·MySQL 공통 일시 연결 장애에 한해 파티션 자동 복구를
+시도한다. ES Probe는 콘텐츠 인덱스 존재 여부를 확인하고 MySQL Probe는 `SELECT 1`을
+실행한다. 자동 Resume은 파티션 Pause가 실제 반영된 뒤 Probe가 연속 성공하고, 최소 중지
+시간이 지난 경우에만 요청한다. Resume 전 Listener의 실행 상태와 현재 파티션 할당을 다시
+확인하고, 재할당된 파티션에는 이전 상태를 사용하지 않는다. Resume이 컨테이너에 반영된
+것을 확인한 후 상태를 정리한다. Offset은 기존 PR2 정책을 따라 실패 레코드 재처리가 성공한
+뒤에만 진행된다.
+
+| 설정 | 기본값 | 의미 |
+| --- | ---: | --- |
+| `mopl.kafka.auto-resume.probe-interval-ms` | 10000ms | Probe 간격 |
+| `mopl.kafka.auto-resume.probe-timeout-ms` | 2000ms | 단일 Probe 제한 시간 |
+| `mopl.kafka.auto-resume.consecutive-successes` | 3회 | Resume 전 필요한 연속 성공 횟수 |
+| `mopl.kafka.auto-resume.minimum-pause-ms` | 10000ms | 실제 Pause 이후 최소 대기 시간 |
+
+Probe timeout·실패는 성공 횟수에 반영하지 않으며 같은 의존성 Probe는 동시에 중복 실행하지
+않는다. 다음 실패로 분류되는 경우 자동 Resume하지 않고 기존처럼 파티션과 Offset을 보존하므로
+운영자가 원인을 해결한 뒤 수동으로 Listener를 재개하거나 API 인스턴스를 재시작해야 한다.
+
+- Elasticsearch 429, 인증·권한·설정 오류, 원인 불명 오류
+- DLT 발행 예외·실패·ACK timeout
+- AI 비활성 및 OpenAI 오류
+- Probe가 의존성을 명확히 식별하지 못하거나 Probe 자체가 복구되지 않은 경우
+
+수동 복구 전에는 Listener ID(`content-search-sync-consumer` 또는
+`content-embedding-consumer`), TopicPartition, consumer group committed offset과 lag를
+기록한다. 장애 원인을 먼저 해결하고 내부 관리 채널에서 해당 파티션을 재개하거나 Listener를
+재시작한다. 재개 후 원본 레코드가 다시 전달될 수 있으므로 DB 최신 상태, Elasticsearch 문서와
+Embedding Hash를 확인한다. 장기 중지 시 원본 Topic retention을 넘기지 않도록 관리한다.
 
 ## 콘텐츠 DLT Topic
 
@@ -121,8 +143,8 @@ KafkaAdmin은 새 DLT를 기본 설정으로 생성한다. 이미 존재하는 D
 `mopl.kafka.content-search-sync.retry-interval-ms`,
 `mopl.kafka.content-search-sync.retry-max-retries`,
 `mopl.kafka.embedding.consumer.retry-interval-ms`,
-`mopl.kafka.embedding.consumer.retry-max-retries`로 조정할 수 있다. 공통 장애 자동 판정과
-자동 재개는 PR3 범위이며 PR2에는 수동 재개만 있다.
+`mopl.kafka.embedding.consumer.retry-max-retries`로 조정할 수 있다. 명확한 ES·MySQL 일시
+연결 장애의 자동 복구 조건과 그 외 오류의 수동 대응은 위 자동 복구 절차를 따른다.
 
 ## 콘텐츠 DLT 선별 재처리
 
@@ -207,16 +229,17 @@ AI 호출·ES 조회/저장 실패는 Kafka 오류 처리로 전파하며, 기�
 Backfill의 실패 집계·중단 정책은 유지한다. 최신 벡터, Hash 불일치, 문서 부재/삭제 등
 기존 생략 조건도 유지하므로 필요 시 `SYNC_DATA`와 `EMBEDDING_BACKFILL`로 보완한다.
 
-### PR1 과도기 오류 정책
+### 콘텐츠 Consumer 오류 정책
 
-두 Listener는 기존 `kafkaListenerContainerFactory`와 공통 `DefaultErrorHandler`를 사용한다.
-기본 재시도는 1000ms 간격 추가 3회이며, 재시도 가능한 오류가 소진되면 해당 파티션을
-중지하고 Offset을 보존한다. Embedding 파티션이 중지되어도 일반 Topic의 소비는 계속된다.
-일반 색인 후 Kafka 발행 자체가 실패하면 일반 Topic 쪽 재시도·중지가 발생한다.
+일반 색인과 Embedding Listener는 전용 Factory와 ErrorHandler를 사용하고, 다른 Listener는
+기존 공통 Factory를 계속 사용한다. 레코드 오류는 설정된 유한 재시도 후 해당 DLT로 이동한다.
+공통 ES·MySQL 연결 장애는 재시도 후 대상 파티션을 Pause하며, 위 조건을 충족하는 장애만
+자동 Resume을 시도한다. Embedding 파티션이 중지되어도 일반 Topic의 소비와 복구 상태는
+독립적으로 관리된다. 일반 색인 후 Embedding 이벤트 발행 자체가 실패하면 일반 Topic 쪽
+재시도와 복구 정책이 적용된다.
 
-PR1에는 DLT·오류 분류(PR2), 자동 재개(PR3), 통계 정합성 변경(#14)이 없다.
-장애를 해결한 후 기존처럼 파티션을 수동 재개하거나 서버를 재시작한다.
-장기 중지 시 원본 Topic retention을 넘기지 않도록 확인한다.
+DLT 발행 실패와 자동 복구 제외 대상은 운영자가 원인을 해결하고 해당 파티션을 수동 재개하거나
+서버를 재시작한다. 장기 중지 시 원본 Topic retention을 넘기지 않도록 확인한다.
 
 ### 설정
 
@@ -265,8 +288,10 @@ Bean은 등록되어도 `autoStartup=false`여서 backlog를 소비하지 않는
 현재 `AiAvailability` 설정도 기동 시 주입되므로 AI 활성 플래그·Key를 변경했다면
 설정을 적용하여 서버를 재시작하는 것이 기본 절차다. 이미 AI 사용 가능한 설정으로
 실행 중이고 운영자가 Listener만 정지한 경우에는 `KafkaListenerEndpointRegistry`에서
-해당 ID의 컨테이너를 명시적으로 시작할 수 있다. 이 PR은 시작 API나 자동 재개 기능을
-추가하지 않는다. 파티션 pause 상태라면 컨테이너 시작과 별개로 해당 파티션 재개가 필요하다.
+해당 ID의 컨테이너를 명시적으로 시작할 수 있다. 별도 시작 API는 제공하지 않는다.
+파티션 pause 상태라면 컨테이너 시작과 별개로 해당 파티션 재개가 필요하다. PR3 자동 복구는
+AI 비활성·OpenAI 오류를 대상으로 하지 않으므로 이 경우에는 원인을 복구한 뒤 수동으로
+Listener와 파티션을 재개하거나 서버를 재시작한다.
 
 재활성화 후 기존 backlog는 전용 그룹의 Offset부터 처리한다. 비활성 기간에는 요청을
 발행하지 않았으므로 backlog 처리만으로 그 기간의 Embedding이 모두 복구되지는 않는다.

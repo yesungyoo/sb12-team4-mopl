@@ -28,6 +28,8 @@ class ContentEmbeddingKafkaConfigTest {
                     ContentSearchKafkaDltConfig.class, ContentSearchKafkaErrorHandlingConfig.class,
                     ContentEmbeddingKafkaConsumer.class, ContentEmbeddingKafkaProducer.class,
                     ContentSearchSyncKafkaProducer.class, AiConfig.class, AiAvailability.class)
+            .withBean(ContentSearchKafkaAutoResumeCoordinator.class,
+                    () -> mock(ContentSearchKafkaAutoResumeCoordinator.class))
             .withBean(ContentRepository.class, () -> mock(ContentRepository.class))
             .withBean(ContentEmbeddingIndexer.class, () -> mock(ContentEmbeddingIndexer.class))
             .withPropertyValues("spring.kafka.bootstrap-servers=localhost:9092");
