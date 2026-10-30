@@ -166,7 +166,7 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         });
     }
 
-    /** Re-arm retained eligible state for the new assignment; old probe successes are discarded. */
+    /** Re-arm only this callback's partitions; sibling child callbacks can still be pending. */
     public void onPartitionsAssigned(String listenerId, Collection<TopicPartition> partitions) {
         long now = clock.millis();
         for (TopicPartition partition : partitions) {
@@ -174,22 +174,6 @@ public class ContentSearchKafkaAutoResumeCoordinator {
             PauseState state = pausedPartitions.get(key);
             if (state != null) {
                 replaceWithFreshState(key, state, now, false, null);
-            }
-        }
-
-        MessageListenerContainer container = listenerRegistry.getListenerContainer(listenerId);
-        Collection<TopicPartition> assigned = container == null ? null : container.getAssignedPartitions();
-        if (assigned != null) {
-            for (Map.Entry<PauseKey, PauseState> entry : pausedPartitions.entrySet()) {
-                PauseKey key = entry.getKey();
-                PauseState state = entry.getValue();
-                if (key.listenerId().equals(listenerId) && !assigned.contains(key.partition())) {
-                    synchronized (state) {
-                        if (pausedPartitions.get(key) == state && state.awaitingAssignment) {
-                            pausedPartitions.remove(key, state);
-                        }
-                    }
-                }
             }
         }
     }
@@ -245,6 +229,11 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         for (Map.Entry<PauseKey, PauseState> entry : pausedPartitions.entrySet()) {
             PauseKey key = entry.getKey();
             PauseState state = entry.getValue();
+            synchronized (state) {
+                if (pausedPartitions.get(key) == state) {
+                    prunePauseOwners(state, key.partition());
+                }
+            }
             MessageListenerContainer container = listenerRegistry.getListenerContainer(key.listenerId());
             if (container == null || !container.isRunning()) {
                 pausedPartitions.remove(key, state);
@@ -458,10 +447,18 @@ public class ContentSearchKafkaAutoResumeCoordinator {
             TopicPartition partition,
             MessageListenerContainer currentOwner
     ) {
+        prunePauseOwners(state, partition);
         return state.pauseOwners.stream()
                 .anyMatch(owner -> owner != currentOwner
                         && owner.isRunning()
-                        && owner.isPartitionPauseRequested(partition));
+                        && (owner.isPartitionPaused(partition)
+                        || owner.isPartitionPauseRequested(partition)));
+    }
+
+    private void prunePauseOwners(PauseState state, TopicPartition partition) {
+        state.pauseOwners.removeIf(owner -> !owner.isRunning()
+                || (!owner.isPartitionPaused(partition)
+                && !owner.isPartitionPauseRequested(partition)));
     }
 
     private void rebindAfterStaleProbe(TrackedPause tracked) {

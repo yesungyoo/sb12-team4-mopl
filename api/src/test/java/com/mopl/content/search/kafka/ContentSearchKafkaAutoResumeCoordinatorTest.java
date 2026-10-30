@@ -33,6 +33,8 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
 
     private static final String LISTENER_ID = "content-search-listener";
     private static final TopicPartition PARTITION = new TopicPartition("content-search-sync", 0);
+    private static final TopicPartition PARTITION_A = new TopicPartition("content-search-sync", 1);
+    private static final TopicPartition PARTITION_B = new TopicPartition("content-search-sync", 2);
     private static final ContentSearchKafkaAutoResumeCoordinator.ProbeSettings SETTINGS =
             new ContentSearchKafkaAutoResumeCoordinator.ProbeSettings(10, 2, 3, 10);
 
@@ -308,6 +310,16 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
     }
 
     @Test
+    void concurrentChildrenCanReassignAFirstWithoutDeletingBRecoveryState() {
+        verifyConcurrentChildReassignmentPreservesBothStates(true);
+    }
+
+    @Test
+    void concurrentChildrenCanReassignBFirstWithoutDeletingARecoveryState() {
+        verifyConcurrentChildReassignmentPreservesBothStates(false);
+    }
+
+    @Test
     void pauseMarkerOnFormerOwnerRemainsRecoverableAfterPartitionMovesAwayAndBack() {
         KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
         MessageListenerContainer container = pausedAssignedContainer(registry);
@@ -424,6 +436,142 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         verify(oldOwner, never()).resumePartition(PARTITION);
         assertThat(probeCount).hasValue(4);
         coordinator.shutdown();
+    }
+
+    private void verifyConcurrentChildReassignmentPreservesBothStates(boolean assignAFirst) {
+        KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
+        MessageListenerContainer parent = mock(MessageListenerContainer.class);
+        when(registry.getListenerContainer(LISTENER_ID)).thenReturn(parent);
+        when(parent.isRunning()).thenReturn(true);
+        AtomicReference<Set<TopicPartition>> parentAssigned = new AtomicReference<>(Set.of(PARTITION_A, PARTITION_B));
+        when(parent.getAssignedPartitions()).thenAnswer(invocation -> parentAssigned.get());
+
+        MessageListenerContainer ownerA = mock(MessageListenerContainer.class);
+        MessageListenerContainer ownerB = mock(MessageListenerContainer.class);
+        AtomicReference<Set<TopicPartition>> assignedA = new AtomicReference<>(Set.of(PARTITION_A));
+        AtomicReference<Set<TopicPartition>> assignedB = new AtomicReference<>(Set.of(PARTITION_B));
+        AtomicBoolean pausedA = new AtomicBoolean(true);
+        AtomicBoolean pausedB = new AtomicBoolean(true);
+        AtomicBoolean pauseRequestedA = new AtomicBoolean(true);
+        AtomicBoolean pauseRequestedB = new AtomicBoolean(true);
+        configureConcurrentOwner(ownerA, PARTITION_A, assignedA, pausedA, pauseRequestedA);
+        configureConcurrentOwner(ownerB, PARTITION_B, assignedB, pausedB, pauseRequestedB);
+        when(parent.getContainerFor(PARTITION_A.topic(), PARTITION_A.partition()))
+                .thenReturn(ownerA);
+        when(parent.getContainerFor(PARTITION_B.topic(), PARTITION_B.partition()))
+                .thenReturn(ownerB);
+
+        MutableClock clock = new MutableClock();
+        ContentSearchKafkaAutoResumeCoordinator coordinator = new ContentSearchKafkaAutoResumeCoordinator(
+                registry,
+                List.of(
+                        probe(Dependency.ELASTICSEARCH),
+                        probe(Dependency.MYSQL)
+                ),
+                SETTINGS,
+                clock,
+                (probe, timeout) -> true
+        );
+        coordinator.recordFailure(LISTENER_ID, PARTITION_A, 10,
+                ContentSearchKafkaAutoResumeCoordinator.PauseReason.COMMON_TRANSIENT, esTransientFailure());
+        coordinator.recordFailure(LISTENER_ID, PARTITION_B, 20,
+                ContentSearchKafkaAutoResumeCoordinator.PauseReason.COMMON_TRANSIENT, mysqlTransientFailure());
+        coordinator.probePausedPartitions();
+        clock.advanceMillis(10);
+        coordinator.probePausedPartitions(); // each eligible dependency has a pre-rebalance success
+
+        coordinator.onPartitionsRevoked(LISTENER_ID, List.of(PARTITION_A));
+        assignedA.set(Set.of());
+        parentAssigned.set(Set.of(PARTITION_B));
+        coordinator.onPartitionsRevoked(LISTENER_ID, List.of(PARTITION_B));
+        assignedB.set(Set.of());
+        parentAssigned.set(Set.of());
+
+        if (assignAFirst) {
+            assignConcurrentPartition(coordinator, PARTITION_A, ownerA, assignedA, parentAssigned,
+                    Set.of(PARTITION_A));
+            coordinator.probePausedPartitions();
+            assertThat(coordinator.trackedPauseCount())
+                    .as("B의 자격은 B child의 할당 콜백 전까지 보존되어야 합니다")
+                    .isEqualTo(2);
+            verify(ownerA, never()).resumePartition(PARTITION_A);
+            verify(ownerB, never()).resumePartition(PARTITION_B);
+            assignConcurrentPartition(coordinator, PARTITION_B, ownerB, assignedB, parentAssigned,
+                    Set.of(PARTITION_A, PARTITION_B));
+        } else {
+            assignConcurrentPartition(coordinator, PARTITION_B, ownerB, assignedB, parentAssigned,
+                    Set.of(PARTITION_B));
+            coordinator.probePausedPartitions();
+            assertThat(coordinator.trackedPauseCount())
+                    .as("A의 자격은 A child의 할당 콜백 전까지 보존되어야 합니다")
+                    .isEqualTo(2);
+            verify(ownerA, never()).resumePartition(PARTITION_A);
+            verify(ownerB, never()).resumePartition(PARTITION_B);
+            assignConcurrentPartition(coordinator, PARTITION_A, ownerA, assignedA, parentAssigned,
+                    Set.of(PARTITION_A, PARTITION_B));
+        }
+
+        assertThat(coordinator.trackedPauseCount()).isEqualTo(2);
+        coordinator.probePausedPartitions(); // observe both pauses under the new assignments
+        clock.advanceMillis(10);
+        coordinator.probePausedPartitions();
+        coordinator.probePausedPartitions();
+        verify(ownerA, never()).resumePartition(PARTITION_A);
+        verify(ownerB, never()).resumePartition(PARTITION_B);
+        coordinator.probePausedPartitions(); // third fresh success for ES and MySQL
+
+        verify(ownerA).resumePartition(PARTITION_A);
+        verify(ownerB).resumePartition(PARTITION_B);
+        verify(ownerA, never()).resumePartition(PARTITION_B);
+        verify(ownerB, never()).resumePartition(PARTITION_A);
+        coordinator.probePausedPartitions();
+        assertThat(coordinator.trackedPauseCount()).isZero();
+        coordinator.shutdown();
+    }
+
+    private void assignConcurrentPartition(
+            ContentSearchKafkaAutoResumeCoordinator coordinator,
+            TopicPartition partition,
+            MessageListenerContainer owner,
+            AtomicReference<Set<TopicPartition>> childAssigned,
+            AtomicReference<Set<TopicPartition>> parentAssigned,
+            Set<TopicPartition> assignedOnParent
+    ) {
+        childAssigned.set(Set.of(partition));
+        parentAssigned.set(assignedOnParent);
+        coordinator.onPartitionsAssigned(LISTENER_ID, List.of(partition));
+        assertThat(owner.isRunning()).isTrue();
+    }
+
+    private void configureConcurrentOwner(
+            MessageListenerContainer owner,
+            TopicPartition partition,
+            AtomicReference<Set<TopicPartition>> assigned,
+            AtomicBoolean paused,
+            AtomicBoolean pauseRequested
+    ) {
+        when(owner.isRunning()).thenReturn(true);
+        when(owner.getAssignedPartitions()).thenAnswer(invocation -> assigned.get());
+        when(owner.isPartitionPaused(partition)).thenAnswer(invocation -> paused.get());
+        when(owner.isPartitionPauseRequested(partition)).thenAnswer(invocation -> pauseRequested.get());
+        doAnswer(invocation -> {
+            paused.set(false);
+            pauseRequested.set(false);
+            return null;
+        }).when(owner).resumePartition(partition);
+    }
+
+    private ContentSearchDependencyHealthProbe probe(Dependency dependency) {
+        return new ContentSearchDependencyHealthProbe() {
+            @Override
+            public Dependency dependency() {
+                return dependency;
+            }
+
+            @Override
+            public void checkHealthy() {
+            }
+        };
     }
 
     @Test
