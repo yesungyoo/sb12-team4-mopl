@@ -98,6 +98,61 @@ public class ContentSearchKafkaFailureClassifier {
         return ambiguousElasticsearchFailure ? FailureType.COMMON_AMBIGUOUS : FailureType.RETRY_THEN_DLT;
     }
 
+    /**
+     * Returns the existing PR2 classification together with a dependency only when
+     * the cause chain identifies it explicitly enough for an automatic health probe.
+     */
+    public FailureClassification classifyWithDependency(Throwable failure) {
+        return new FailureClassification(classify(failure), dependencyOf(failure));
+    }
+
+    private Dependency dependencyOf(Throwable failure) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable current = failure;
+        boolean springDataResourceFailure = false;
+        while (current != null && visited.add(current)) {
+            if (current instanceof AiClientException) {
+                return Dependency.OPENAI;
+            }
+            if (current instanceof DataAccessResourceFailureException) {
+                springDataResourceFailure = true;
+            }
+            if (current instanceof NoSuchIndexException
+                    || current instanceof ResourceNotFoundException
+                    || current instanceof org.springframework.data.elasticsearch.ResourceFailureException
+                    || current instanceof RestStatusException
+                    || current instanceof UncategorizedElasticsearchException
+                    || current instanceof ResourceAccessException
+                    || current.getClass().getName().contains("Elasticsearch")) {
+                return Dependency.ELASTICSEARCH;
+            }
+            if (current instanceof CannotGetJdbcConnectionException
+                    || current instanceof SQLTransientConnectionException
+                    || current instanceof SQLRecoverableException
+                    || current instanceof SQLException sqlException
+                    && sqlException.getSQLState() != null
+                    && sqlException.getSQLState().startsWith("08")) {
+                return Dependency.MYSQL;
+            }
+            if (springDataResourceFailure
+                    && current.getClass().getName().equals("org.apache.http.ConnectionClosedException")) {
+                // Spring Data Elasticsearch translates the Apache HTTP client's closed-connection
+                // cause to DataAccessResourceFailureException. Require that outer translation;
+                // a standalone ConnectionClosedException does not identify its dependency.
+                return Dependency.ELASTICSEARCH;
+            }
+            if (springDataResourceFailure && (current instanceof ConnectException
+                    || current instanceof SocketTimeoutException
+                    || current instanceof java.net.UnknownHostException
+                    || current instanceof java.net.SocketException
+                    || isNetworkFailure(current))) {
+                return Dependency.ELASTICSEARCH;
+            }
+            current = current.getCause();
+        }
+        return Dependency.UNKNOWN;
+    }
+
     public boolean shouldSkipRetry(Throwable failure) {
         FailureType type = classify(failure);
         return type == FailureType.RECORD_PERMANENT
@@ -279,5 +334,15 @@ public class ContentSearchKafkaFailureClassifier {
         COMMON_TRANSIENT,
         COMMON_CONFIGURATION,
         COMMON_AMBIGUOUS
+    }
+
+    public enum Dependency {
+        ELASTICSEARCH,
+        MYSQL,
+        OPENAI,
+        UNKNOWN
+    }
+
+    public record FailureClassification(FailureType failureType, Dependency dependency) {
     }
 }

@@ -111,6 +111,75 @@ class ContentSearchKafkaFailureClassifierTest {
     }
 
     @Test
+    void identifiesOnlyExplicitElasticsearchAndMysqlTransientDependenciesForAutoResume() {
+        assertThat(classifier.classifyWithDependency(new RestStatusException(503, "cluster unavailable")))
+                .isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                        ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT,
+                        ContentSearchKafkaFailureClassifier.Dependency.ELASTICSEARCH
+                ));
+        assertThat(classifier.classifyWithDependency(new CannotGetJdbcConnectionException(
+                "connection unavailable", new SQLTransientConnectionException("pool timeout")
+        ))).isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT,
+                ContentSearchKafkaFailureClassifier.Dependency.MYSQL
+        ));
+        assertThat(classifier.classifyWithDependency(aiFailure(503, "service unavailable")).dependency())
+                .isEqualTo(ContentSearchKafkaFailureClassifier.Dependency.OPENAI);
+        assertThat(classifier.classifyWithDependency(new java.net.ConnectException("connection refused"))
+                .dependency()).isEqualTo(ContentSearchKafkaFailureClassifier.Dependency.UNKNOWN);
+        assertThat(classifier.classifyWithDependency(new DataAccessResourceFailureException("resource unavailable"))
+                .dependency()).isEqualTo(ContentSearchKafkaFailureClassifier.Dependency.UNKNOWN);
+        assertThat(classifier.classifyWithDependency(new DataAccessResourceFailureException(
+                "Elasticsearch connection failed",
+                new org.springframework.web.client.ResourceAccessException("connection refused")
+        ))).isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT,
+                ContentSearchKafkaFailureClassifier.Dependency.ELASTICSEARCH
+        ));
+        assertThat(classifier.classifyWithDependency(new DataAccessResourceFailureException(
+                "Elasticsearch connection failed", new java.net.ConnectException("connection refused")
+        )).dependency()).isEqualTo(ContentSearchKafkaFailureClassifier.Dependency.ELASTICSEARCH);
+    }
+
+    @Test
+    void identifiesSpringDataElasticsearchClosedConnectionWithoutGuessingStandaloneCause() {
+        org.apache.http.ConnectionClosedException closedConnection =
+                new org.apache.http.ConnectionClosedException("Connection is closed");
+        DataAccessResourceFailureException elasticsearchFailure = new DataAccessResourceFailureException(
+                "Connection is closed", new RuntimeException("Connection is closed", closedConnection));
+
+        assertThat(classifier.classifyWithDependency(elasticsearchFailure))
+                .isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                        ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT,
+                        ContentSearchKafkaFailureClassifier.Dependency.ELASTICSEARCH
+                ));
+        assertThat(classifier.classifyWithDependency(closedConnection))
+                .isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                        ContentSearchKafkaFailureClassifier.FailureType.RETRY_THEN_DLT,
+                        ContentSearchKafkaFailureClassifier.Dependency.UNKNOWN
+                ));
+        assertThat(classifier.classifyWithDependency(new CannotGetJdbcConnectionException(
+                "database connection failed", new SQLTransientConnectionException("Hikari timeout")
+        ))).isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                ContentSearchKafkaFailureClassifier.FailureType.COMMON_TRANSIENT,
+                ContentSearchKafkaFailureClassifier.Dependency.MYSQL
+        ));
+    }
+
+    @Test
+    void keepsEs429AndConfigurationFailuresOutOfTransientAutoResumeClassification() {
+        assertThat(classifier.classifyWithDependency(new RestStatusException(429, "rate limited")))
+                .isEqualTo(new ContentSearchKafkaFailureClassifier.FailureClassification(
+                        ContentSearchKafkaFailureClassifier.FailureType.COMMON_AMBIGUOUS,
+                        ContentSearchKafkaFailureClassifier.Dependency.ELASTICSEARCH
+                ));
+        assertThat(classifier.classifyWithDependency(new NoSuchIndexException("missing index")).failureType())
+                .isEqualTo(ContentSearchKafkaFailureClassifier.FailureType.COMMON_CONFIGURATION);
+        assertThat(classifier.classifyWithDependency(aiFailure(429, "{\"error\":{\"code\":\"rate_limit_exceeded\"}}"))
+                .dependency()).isEqualTo(ContentSearchKafkaFailureClassifier.Dependency.OPENAI);
+    }
+
+    @Test
     void treatsKeyAndValueDeserializationAsRecordFailuresBeforeSerializationConfigurationFailures() {
         DeserializationException keyFailure = new DeserializationException(
                 "key deserialization failed", new byte[]{(byte) 0xff}, true,
