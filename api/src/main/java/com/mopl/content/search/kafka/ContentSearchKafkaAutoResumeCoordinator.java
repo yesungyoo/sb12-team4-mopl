@@ -18,7 +18,7 @@ import java.util.StringJoiner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +27,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.TopicPartition;
@@ -129,6 +130,12 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         } else {
             synchronized (previous) {
                 if (pausedPartitions.get(key) == previous) {
+                    replacement.pauseOwners.addAll(previous.pauseOwners);
+                    if (previous.owner != null
+                            && (previous.owner.isPartitionPaused(partition)
+                            || previous.owner.isPartitionPauseRequested(partition))) {
+                        replacement.pauseOwners.add(previous.owner);
+                    }
                     pausedPartitions.replace(key, previous, replacement);
                 } else {
                     pausedPartitions.put(key, replacement);
@@ -151,14 +158,40 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         }
     }
 
-    /** Remove state as soon as a listener loses a partition assignment. */
+    /** Detach the old owner while retaining only an already-eligible failure for reassignment. */
     public void onPartitionsRevoked(String listenerId, Collection<TopicPartition> partitions) {
-        partitions.forEach(partition -> cancel(listenerId, partition));
+        partitions.forEach(partition -> {
+            rememberPauseOwner(listenerId, partition);
+            detachForReassignment(listenerId, partition);
+        });
     }
 
-    /** An assignment always starts with a fresh local recovery state. */
+    /** Re-arm retained eligible state for the new assignment; old probe successes are discarded. */
     public void onPartitionsAssigned(String listenerId, Collection<TopicPartition> partitions) {
-        partitions.forEach(partition -> cancel(listenerId, partition));
+        long now = clock.millis();
+        for (TopicPartition partition : partitions) {
+            PauseKey key = new PauseKey(listenerId, partition);
+            PauseState state = pausedPartitions.get(key);
+            if (state != null) {
+                replaceWithFreshState(key, state, now, false, null);
+            }
+        }
+
+        MessageListenerContainer container = listenerRegistry.getListenerContainer(listenerId);
+        Collection<TopicPartition> assigned = container == null ? null : container.getAssignedPartitions();
+        if (assigned != null) {
+            for (Map.Entry<PauseKey, PauseState> entry : pausedPartitions.entrySet()) {
+                PauseKey key = entry.getKey();
+                PauseState state = entry.getValue();
+                if (key.listenerId().equals(listenerId) && !assigned.contains(key.partition())) {
+                    synchronized (state) {
+                        if (pausedPartitions.get(key) == state && state.awaitingAssignment) {
+                            pausedPartitions.remove(key, state);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @PostConstruct
@@ -220,13 +253,17 @@ public class ContentSearchKafkaAutoResumeCoordinator {
 
             Collection<TopicPartition> assigned = container.getAssignedPartitions();
             if (assigned == null || !assigned.contains(key.partition())) {
-                pausedPartitions.remove(key, state);
+                synchronized (state) {
+                    if (pausedPartitions.get(key) == state && !state.awaitingAssignment) {
+                        pausedPartitions.remove(key, state);
+                    }
+                }
                 continue;
             }
 
             MessageListenerContainer owner = currentPartitionOwner(container, key.partition());
             if (!owner.isRunning()) {
-                pausedPartitions.remove(key, state);
+                replaceWithFreshState(key, state, now, true, null);
                 continue;
             }
 
@@ -234,20 +271,35 @@ public class ContentSearchKafkaAutoResumeCoordinator {
                 if (pausedPartitions.get(key) != state) {
                     continue;
                 }
+                if (state.awaitingAssignment) {
+                    state.awaitingAssignment = false;
+                    state.owner = null;
+                    state.phase = PausePhase.PAUSE_REQUESTED;
+                    state.pausedAtMillis = now;
+                    state.consecutiveSuccesses = 0;
+                }
+                if (owner.isPartitionPaused(key.partition())
+                        || owner.isPartitionPauseRequested(key.partition())) {
+                    state.pauseOwners.add(owner);
+                }
                 if (state.owner != null && state.owner != owner) {
-                    // A different child container now owns the partition; never reuse its predecessor's probe state.
-                    pausedPartitions.remove(key, state);
+                    // Keep the known eligible dependency, but discard the former owner's pause/probe state.
+                    replaceWithFreshState(key, state, now, false, owner);
                     continue;
                 }
                 state.owner = owner;
 
                 if (state.phase == PausePhase.RESUME_REQUESTED) {
                     if (!owner.isPartitionPaused(key.partition())) {
-                        pausedPartitions.remove(key, state);
-                        log.info(
-                                "Kafka 자동 Resume이 반영되어 복구 상태를 정리했습니다. listener={}, topic={}, partition={}, offset={}",
-                                key.listenerId(), key.partition().topic(), key.partition().partition(), state.failedOffset
-                        );
+                        if (hasOutstandingPauseOwner(state, key.partition(), owner)) {
+                            replaceWithFreshState(key, state, now, false, null);
+                        } else {
+                            pausedPartitions.remove(key, state);
+                            log.info(
+                                    "Kafka 자동 Resume이 반영되어 복구 상태를 정리했습니다. listener={}, topic={}, partition={}, offset={}",
+                                    key.listenerId(), key.partition().topic(), key.partition().partition(), state.failedOffset
+                            );
+                        }
                     }
                     continue;
                 }
@@ -255,6 +307,9 @@ public class ContentSearchKafkaAutoResumeCoordinator {
                 if (!owner.isPartitionPaused(key.partition())) {
                     if (owner.isPartitionPauseRequested(key.partition())) {
                         state.phase = PausePhase.PAUSE_REQUESTED;
+                    } else if (hasOutstandingPauseOwner(state, key.partition(), owner)) {
+                        // A former child still owns a persistent pause request; retain eligibility until it is reassigned.
+                        continue;
                     } else if (now - state.createdAtMillis
                             > settings.probeIntervalMs() * PAUSE_REQUEST_TIMEOUT_MULTIPLIER) {
                         pausedPartitions.remove(key, state);
@@ -307,6 +362,10 @@ public class ContentSearchKafkaAutoResumeCoordinator {
             if (pausedPartitions.get(key) != state || state.phase != PausePhase.PAUSED) {
                 return;
             }
+            if (!isCurrentAssignment(tracked)) {
+                rebindAfterStaleProbe(tracked);
+                return;
+            }
             if (!healthy) {
                 state.consecutiveSuccesses = 0;
                 return;
@@ -318,7 +377,7 @@ public class ContentSearchKafkaAutoResumeCoordinator {
             }
 
             if (!isCurrentAssignment(tracked)) {
-                pausedPartitions.remove(key, state);
+                rebindAfterStaleProbe(tracked);
                 return;
             }
 
@@ -369,6 +428,98 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         return owner == null ? container : owner;
     }
 
+    private void detachForReassignment(String listenerId, TopicPartition partition) {
+        PauseKey key = new PauseKey(listenerId, partition);
+        PauseState state = pausedPartitions.get(key);
+        if (state != null) {
+            replaceWithFreshState(key, state, clock.millis(), true, null);
+        }
+    }
+
+    private void rememberPauseOwner(String listenerId, TopicPartition partition) {
+        PauseKey key = new PauseKey(listenerId, partition);
+        PauseState state = pausedPartitions.get(key);
+        MessageListenerContainer container = listenerRegistry.getListenerContainer(listenerId);
+        if (state == null || container == null) {
+            return;
+        }
+        MessageListenerContainer owner = currentPartitionOwner(container, partition);
+        if (owner.isPartitionPaused(partition) || owner.isPartitionPauseRequested(partition)) {
+            synchronized (state) {
+                if (pausedPartitions.get(key) == state) {
+                    state.pauseOwners.add(owner);
+                }
+            }
+        }
+    }
+
+    private boolean hasOutstandingPauseOwner(
+            PauseState state,
+            TopicPartition partition,
+            MessageListenerContainer currentOwner
+    ) {
+        return state.pauseOwners.stream()
+                .anyMatch(owner -> owner != currentOwner
+                        && owner.isRunning()
+                        && owner.isPartitionPauseRequested(partition));
+    }
+
+    private void rebindAfterStaleProbe(TrackedPause tracked) {
+        PauseKey key = tracked.key();
+        PauseState state = tracked.state();
+        MessageListenerContainer current = listenerRegistry.getListenerContainer(key.listenerId());
+        if (current == null || current != tracked.container() || !current.isRunning()) {
+            pausedPartitions.remove(key, state);
+            return;
+        }
+        Collection<TopicPartition> assigned = current.getAssignedPartitions();
+        if (assigned == null || !assigned.contains(key.partition())) {
+            pausedPartitions.remove(key, state);
+            return;
+        }
+        MessageListenerContainer owner = currentPartitionOwner(current, key.partition());
+        Collection<TopicPartition> ownerAssignments = owner.getAssignedPartitions();
+        boolean stillPaused = owner.isRunning()
+                && ownerAssignments != null
+                && ownerAssignments.contains(key.partition())
+                && (owner.isPartitionPaused(key.partition()) || owner.isPartitionPauseRequested(key.partition()));
+        if (!stillPaused) {
+            pausedPartitions.remove(key, state);
+            return;
+        }
+        replaceWithFreshState(key, state, clock.millis(), false, owner);
+    }
+
+    private void replaceWithFreshState(
+            PauseKey key,
+            PauseState previous,
+            long now,
+            boolean awaitingAssignment,
+            MessageListenerContainer owner
+    ) {
+        synchronized (previous) {
+            if (pausedPartitions.get(key) != previous) {
+                return;
+            }
+            PauseState replacement = new PauseState(
+                    previous.failedOffset,
+                    previous.dependency,
+                    now,
+                    awaitingAssignment,
+                    owner
+            );
+            replacement.pauseOwners.addAll(previous.pauseOwners);
+            if (previous.owner != null) {
+                replacement.pauseOwners.add(previous.owner);
+            }
+            if (owner != null && (owner.isPartitionPaused(key.partition())
+                    || owner.isPartitionPauseRequested(key.partition()))) {
+                replacement.pauseOwners.add(owner);
+            }
+            pausedPartitions.replace(key, previous, replacement);
+        }
+    }
+
     private boolean isEligible(FailureClassification classification) {
         return classification != null
                 && classification.failureType() == FailureType.COMMON_TRANSIENT
@@ -393,15 +544,30 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         private final Dependency dependency;
         private final long createdAtMillis;
         private volatile MessageListenerContainer owner;
+        private volatile boolean awaitingAssignment;
+        private final Set<MessageListenerContainer> pauseOwners =
+                Collections.newSetFromMap(new IdentityHashMap<>());
         private PausePhase phase = PausePhase.PAUSE_REQUESTED;
         private long pausedAtMillis;
         private int consecutiveSuccesses;
 
         private PauseState(long failedOffset, Dependency dependency, long createdAtMillis) {
+            this(failedOffset, dependency, createdAtMillis, false, null);
+        }
+
+        private PauseState(
+                long failedOffset,
+                Dependency dependency,
+                long createdAtMillis,
+                boolean awaitingAssignment,
+                MessageListenerContainer owner
+        ) {
             this.failedOffset = failedOffset;
             this.dependency = dependency;
             this.createdAtMillis = createdAtMillis;
             this.pausedAtMillis = createdAtMillis;
+            this.awaitingAssignment = awaitingAssignment;
+            this.owner = owner;
         }
     }
 
@@ -442,9 +608,13 @@ public class ContentSearchKafkaAutoResumeCoordinator {
     static final class BoundedProbeInvoker implements ProbeInvoker {
 
         private final ThreadPoolExecutor executor;
-        private final Map<Dependency, java.util.concurrent.atomic.AtomicBoolean> inFlight = new ConcurrentHashMap<>();
+        private final Map<Dependency, ProbeTask> inFlight = new ConcurrentHashMap<>();
 
         BoundedProbeInvoker() {
+            this(2, 2);
+        }
+
+        BoundedProbeInvoker(int workerCount, int queueCapacity) {
             AtomicInteger threadNumber = new AtomicInteger();
             ThreadFactory threadFactory = task -> {
                 Thread thread = new Thread(task, "content-kafka-health-probe-" + threadNumber.incrementAndGet());
@@ -452,48 +622,38 @@ public class ContentSearchKafkaAutoResumeCoordinator {
                 return thread;
             };
             this.executor = new ThreadPoolExecutor(
-                    2, 2, 0L, TimeUnit.MILLISECONDS,
-                    new ArrayBlockingQueue<>(2), threadFactory,
+                    workerCount, workerCount, 0L, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(queueCapacity), threadFactory,
                     new ThreadPoolExecutor.AbortPolicy()
             );
         }
 
         @Override
         public boolean check(ContentSearchDependencyHealthProbe probe, long timeoutMs) {
-            java.util.concurrent.atomic.AtomicBoolean running = inFlight.computeIfAbsent(
-                    probe.dependency(), ignored -> new java.util.concurrent.atomic.AtomicBoolean()
-            );
-            if (!running.compareAndSet(false, true)) {
+            ProbeTask task = new ProbeTask(probe, inFlight);
+            if (inFlight.putIfAbsent(probe.dependency(), task) != null) {
                 log.debug("Kafka 자동 복구 Probe를 건너뜁니다. 이미 실행 중입니다. dependency={}, probe={}",
                         probe.dependency(), probe.getClass().getName());
                 return false;
             }
-            Future<?> future;
             try {
-                future = executor.submit(() -> {
-                    try {
-                        probe.checkHealthy();
-                    } finally {
-                        running.set(false);
-                    }
-                });
+                executor.execute(task);
             } catch (RejectedExecutionException rejected) {
-                running.set(false);
+                task.cancelBeforeStart();
                 log.warn("Kafka 자동 복구 Probe 작업이 거부되었습니다. dependency={}, probe={}, causeTypes={}",
                         probe.dependency(), probe.getClass().getName(), causeTypes(rejected));
                 return false;
             }
             try {
-                future.get(timeoutMs, TimeUnit.MILLISECONDS);
-                return true;
+                return task.get(timeoutMs, TimeUnit.MILLISECONDS);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                future.cancel(true);
+                task.cancelProbe();
                 log.warn("Kafka 자동 복구 Probe가 중단되었습니다. dependency={}, probe={}, causeTypes={}",
                         probe.dependency(), probe.getClass().getName(), causeTypes(interrupted));
                 return false;
             } catch (TimeoutException timeout) {
-                future.cancel(true);
+                task.cancelProbe();
                 log.warn("Kafka 자동 복구 Probe timeout. dependency={}, probe={}, timeoutMs={}, causeTypes={}",
                         probe.dependency(), probe.getClass().getName(), timeoutMs, causeTypes(timeout));
                 return false;
@@ -506,10 +666,9 @@ public class ContentSearchKafkaAutoResumeCoordinator {
                     log.warn("Kafka 자동 복구 Probe에서 예외가 발생했습니다. dependency={}, probe={}, causeTypes={}",
                             probe.dependency(), probe.getClass().getName(), causeTypes(cause));
                 }
-                future.cancel(true);
                 return false;
             } catch (RuntimeException failure) {
-                future.cancel(true);
+                task.cancelProbe();
                 log.warn("Kafka 자동 복구 Probe 실행에 실패했습니다. dependency={}, probe={}, causeTypes={}",
                         probe.dependency(), probe.getClass().getName(), causeTypes(failure));
                 return false;
@@ -519,6 +678,74 @@ public class ContentSearchKafkaAutoResumeCoordinator {
         @Override
         public void close() {
             executor.shutdownNow();
+        }
+
+        private enum ProbeTaskState {
+            SCHEDULED,
+            RUNNING,
+            COMPLETED,
+            CANCELLED_BEFORE_START,
+            CANCELLED_RUNNING
+        }
+
+        private static final class ProbeTask extends FutureTask<Boolean> {
+
+            private final Dependency dependency;
+            private final Map<Dependency, ProbeTask> inFlight;
+            private final AtomicReference<ProbeTaskState> state =
+                    new AtomicReference<>(ProbeTaskState.SCHEDULED);
+
+            private ProbeTask(
+                    ContentSearchDependencyHealthProbe probe,
+                    Map<Dependency, ProbeTask> inFlight
+            ) {
+                super(() -> {
+                    probe.checkHealthy();
+                    return true;
+                });
+                this.dependency = probe.dependency();
+                this.inFlight = inFlight;
+            }
+
+            @Override
+            public void run() {
+                if (!state.compareAndSet(ProbeTaskState.SCHEDULED, ProbeTaskState.RUNNING)) {
+                    return;
+                }
+                try {
+                    super.run();
+                } finally {
+                    state.set(ProbeTaskState.COMPLETED);
+                    inFlight.remove(dependency, this);
+                }
+            }
+
+            private void cancelProbe() {
+                while (true) {
+                    ProbeTaskState current = state.get();
+                    if (current == ProbeTaskState.SCHEDULED) {
+                        if (state.compareAndSet(current, ProbeTaskState.CANCELLED_BEFORE_START)) {
+                            cancel(false);
+                            inFlight.remove(dependency, this);
+                            return;
+                        }
+                    } else if (current == ProbeTaskState.RUNNING) {
+                        if (state.compareAndSet(current, ProbeTaskState.CANCELLED_RUNNING)) {
+                            cancel(true);
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                }
+            }
+
+            private void cancelBeforeStart() {
+                if (state.compareAndSet(ProbeTaskState.SCHEDULED, ProbeTaskState.CANCELLED_BEFORE_START)) {
+                    cancel(false);
+                    inFlight.remove(dependency, this);
+                }
+            }
         }
     }
 }
