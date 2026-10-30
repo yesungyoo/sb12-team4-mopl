@@ -16,6 +16,8 @@ import static org.mockito.Mockito.when;
 import com.mopl.content.repository.ContentRepository;
 import com.mopl.content.search.document.ContentSearchDocument;
 import com.mopl.content.search.repository.ContentSearchRepository;
+import com.mopl.content.search.service.ContentSearchIndexer;
+import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.core.common.enums.ContentType;
 import com.mopl.core.common.enums.ExternalSource;
 import com.mopl.core.common.kafka.ContentEmbeddingKafkaEvent;
@@ -40,9 +42,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,11 +63,14 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.MessageListenerContainer;
+import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.ContainerTestUtils;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -75,6 +88,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "mopl.kafka.embedding.group-id=content-embedding-it",
         "mopl.kafka.consumer.retry-interval-ms=100",
         "mopl.kafka.consumer.retry-max-retries=2",
+        "mopl.kafka.dlt.producer.request-timeout-ms=100",
+        "mopl.kafka.dlt.producer.delivery-timeout-ms=200",
+        "mopl.kafka.dlt.producer.ack-timeout-ms=300",
         "mopl.ai.enabled=true",
         "ai.openai.api-key=test-key",
         "ai.openai.embedding-model=text-embedding-3-small",
@@ -82,7 +98,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 })
 @EmbeddedKafka(partitions = 1, topics = {
         ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
-        ContentSearchKafkaTopics.CONTENT_EMBEDDING
+        ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+        ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT,
+        ContentSearchKafkaTopics.CONTENT_EMBEDDING_DLT
 }, bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
@@ -105,6 +123,8 @@ class ContentKafkaEmbeddingIntegrationTest {
 
     @Autowired private ContentRepository contentRepository;
     @Autowired private ContentSearchRepository searchRepository;
+    @MockitoSpyBean private ContentSearchIndexer contentSearchIndexer;
+    @MockitoSpyBean private ContentEmbeddingIndexer contentEmbeddingIndexer;
     @Autowired private KafkaListenerEndpointRegistry registry;
     @Autowired private EmbeddedKafkaBroker broker;
 
@@ -114,6 +134,13 @@ class ContentKafkaEmbeddingIntegrationTest {
 
     @MockitoSpyBean(name = "contentEmbeddingKafkaTemplate")
     private KafkaTemplate<String, Object> embeddingTemplate;
+
+    @MockitoSpyBean(name = "contentDltKafkaTemplate")
+    private KafkaTemplate<Object, Object> dltTemplate;
+
+    @Autowired
+    @Qualifier("contentSearchSyncDltRecoverer")
+    private DeadLetterPublishingRecoverer searchDltRecoverer;
 
     @MockitoBean private EmbeddingClient embeddingClient;
 
@@ -224,16 +251,200 @@ class ContentKafkaEmbeddingIntegrationTest {
         verify(embeddingClient, times(3)).embed(any(EmbeddingRequest.class));
     }
 
+    @Test
+    void embeddingDltAcknowledgementAllowsFollowingRecordToBeProcessed() throws Exception {
+        searchListener().stop();
+        Content first = saveContent("embedding DLT first record");
+        Content second = saveContent("embedding DLT following record");
+        contentSearchIndexer.index(first);
+        contentSearchIndexer.index(second);
+        doAnswer(invocation -> {
+            Content content = invocation.getArgument(0);
+            if (content.getId().equals(first.getId())) {
+                throw new IllegalStateException("record-specific embedding failure");
+            }
+            return invocation.callRealMethod();
+        }).when(contentEmbeddingIndexer).indexForKafka(any(Content.class));
+
+        RecordMetadata firstMetadata = embeddingTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                first.getId().toString(),
+                new ContentEmbeddingKafkaEvent(first.getId())
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        await(() -> committedOffset(EMBEDDING_GROUP, firstMetadata.topic()) > firstMetadata.offset());
+        assertThat(readFirstDltRecord().key()).isEqualTo(first.getId().toString());
+
+        RecordMetadata secondMetadata = embeddingTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                second.getId().toString(),
+                new ContentEmbeddingKafkaEvent(second.getId())
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        await(() -> committedOffset(EMBEDDING_GROUP, secondMetadata.topic()) > secondMetadata.offset());
+        await(() -> hasEmbedding(second));
+    }
+
+    @ParameterizedTest
+    @EnumSource(DltPublishFailure.class)
+    void failedEmbeddingDltPublishPausesPartitionAndPreservesSourceOffset(DltPublishFailure failure)
+            throws Exception {
+        MessageListenerContainer search = searchListener();
+        search.stop();
+
+        Content content = saveContent("embedding DLT ACK failure");
+        contentSearchIndexer.index(content);
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenThrow(new IllegalStateException("unclassified record processing failure"));
+        stubDltPublishFailure(failure);
+
+        RecordMetadata sourceRecord = embeddingTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                content.getId().toString(),
+                new ContentEmbeddingKafkaEvent(content.getId())
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        TopicPartition sourcePartition = new TopicPartition(sourceRecord.topic(), sourceRecord.partition());
+
+        await(() -> embeddingListener().isPartitionPaused(sourcePartition));
+        assertOffsetPreserved(EMBEDDING_GROUP, sourceRecord, sourcePartition, embeddingListener());
+        verify(dltTemplate, times(1)).send(any(ProducerRecord.class));
+        verify(embeddingClient, times(3)).embed(any(EmbeddingRequest.class));
+        org.mockito.Mockito.reset(dltTemplate);
+        embeddingListener().resumePartition(sourcePartition);
+        await(() -> committedOffset(EMBEDDING_GROUP, sourceRecord.topic()) > sourceRecord.offset());
+    }
+
+    @ParameterizedTest
+    @EnumSource(DltPublishFailure.class)
+    void failedSearchDltPublishPausesOnlySearchPartitionAndPreservesSourceOffset(DltPublishFailure failure)
+            throws Exception {
+        Content content = saveContent("search DLT ACK failure " + failure);
+        doThrow(new IllegalStateException("unclassified search record failure"))
+                .when(contentSearchIndexer).index(any(Content.class));
+        stubDltPublishFailure(failure);
+
+        RecordMetadata source = sourceTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
+                content.getId().toString(),
+                new com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent(content.getId(), false)
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        TopicPartition partition = new TopicPartition(source.topic(), source.partition());
+
+        await(() -> searchListener().isPartitionPaused(partition));
+        assertOffsetPreserved(SEARCH_GROUP, source, partition, searchListener());
+        assertThat(embeddingListener().isPartitionPaused(
+                new TopicPartition(ContentSearchKafkaTopics.CONTENT_EMBEDDING, 0))).isFalse();
+        verify(dltTemplate, times(1)).send(any(ProducerRecord.class));
+        org.mockito.Mockito.reset(dltTemplate);
+        searchListener().resumePartition(partition);
+        await(() -> committedOffset(SEARCH_GROUP, source.topic()) > source.offset());
+    }
+
+    @Test
+    void commonElasticsearchFailurePausesSearchAndEmbeddingIndependently() throws Exception {
+        Content searchContent = saveContent("common ES search failure");
+        Content embeddingContent = saveContent("common ES embedding failure");
+        org.springframework.web.client.ResourceAccessException outage =
+                new org.springframework.web.client.ResourceAccessException("simulated Elasticsearch outage");
+        doThrow(outage).when(contentSearchIndexer).index(any(Content.class));
+        doThrow(outage).when(contentEmbeddingIndexer).indexForKafka(any(Content.class));
+
+        RecordMetadata searchSource = sourceTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
+                searchContent.getId().toString(),
+                new com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent(searchContent.getId(), false)
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        RecordMetadata embeddingSource = embeddingTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                embeddingContent.getId().toString(),
+                new ContentEmbeddingKafkaEvent(embeddingContent.getId())
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+        TopicPartition searchPartition = new TopicPartition(searchSource.topic(), searchSource.partition());
+        TopicPartition embeddingPartition = new TopicPartition(embeddingSource.topic(), embeddingSource.partition());
+
+        await(() -> searchListener().isPartitionPaused(searchPartition)
+                && embeddingListener().isPartitionPaused(embeddingPartition));
+        assertOffsetPreserved(SEARCH_GROUP, searchSource, searchPartition, searchListener());
+        assertOffsetPreserved(EMBEDDING_GROUP, embeddingSource, embeddingPartition, embeddingListener());
+        assertThat(searchListener().isPartitionPaused(embeddingPartition)).isFalse();
+        assertThat(embeddingListener().isPartitionPaused(searchPartition)).isFalse();
+    }
+
+    @Test
+    void searchDltRecovererPreservesRawKeyBytesAndKeyFailureMetadata() throws Exception {
+        byte[] originalKey = new byte[]{0x00, 0x01, (byte) 0xff, 0x41};
+        long originalOffset = 1234L;
+        UUID contentId = UUID.randomUUID();
+        ConsumerRecord<byte[], Object> failedRecord = new ConsumerRecord<>(
+                ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC,
+                0,
+                originalOffset,
+                originalKey,
+                new com.mopl.core.common.kafka.ContentSearchSyncKafkaEvent(contentId, false)
+        );
+        failedRecord.headers().add(new RecordHeader(
+                KafkaHeaders.DLT_KEY_EXCEPTION_FQCN,
+                "example.RawKeyDeserializationFailure".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        ));
+
+        searchDltRecoverer.accept(
+                failedRecord,
+                org.mockito.Mockito.mock(Consumer.class),
+                new IllegalStateException("simulated key deserialization failure")
+        );
+
+        ConsumerRecord<byte[], byte[]> dltRecord = readSearchDltRecordByRawKey(originalKey);
+        assertThat(dltRecord.key()).containsExactly(originalKey);
+        assertThat(new String(dltRecord.headers().lastHeader(KafkaHeaders.DLT_KEY_EXCEPTION_FQCN).value(),
+                java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("example.RawKeyDeserializationFailure");
+        assertThat(new String(dltRecord.headers().lastHeader(KafkaHeaders.DLT_ORIGINAL_TOPIC).value(),
+                java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC);
+        assertThat(java.nio.ByteBuffer.wrap(dltRecord.headers()
+                .lastHeader(KafkaHeaders.DLT_ORIGINAL_PARTITION).value()).getInt()).isZero();
+        assertThat(java.nio.ByteBuffer.wrap(dltRecord.headers()
+                .lastHeader(KafkaHeaders.DLT_ORIGINAL_OFFSET).value()).getLong()).isEqualTo(originalOffset);
+    }
+
+    @Test
+    void successfulDltAckAdvancesSourceOffsetAndPreservesEventTypeAndKey() throws Exception {
+        searchListener().stop();
+        Content content = saveContent("embedding DLT ACK success");
+        contentSearchIndexer.index(content);
+        when(embeddingClient.embed(any(EmbeddingRequest.class)))
+                .thenThrow(new IllegalStateException("unclassified record processing failure"));
+
+        RecordMetadata sourceRecord = embeddingTemplate.send(
+                ContentSearchKafkaTopics.CONTENT_EMBEDDING,
+                content.getId().toString(),
+                new ContentEmbeddingKafkaEvent(content.getId())
+        ).get(10, TimeUnit.SECONDS).getRecordMetadata();
+
+        await(() -> committedOffset(EMBEDDING_GROUP, sourceRecord.topic()) > sourceRecord.offset());
+        ConsumerRecord<String, byte[]> dltRecord = readFirstDltRecord();
+        assertThat(dltRecord.key()).isEqualTo(content.getId().toString());
+        assertThat(new String(dltRecord.value(), java.nio.charset.StandardCharsets.UTF_8))
+                .contains(content.getId().toString());
+        assertThat(new String(
+                dltRecord.headers().lastHeader("__TypeId__").value(),
+                java.nio.charset.StandardCharsets.UTF_8
+        )).isEqualTo("contentEmbedding");
+        verify(embeddingClient, times(3)).embed(any(EmbeddingRequest.class));
+    }
+
     @ParameterizedTest
     @EnumSource(PublishFailure.class)
     void publishFailureKeepsOriginalOffset(PublishFailure failure) throws Exception {
         Content content = saveContent("publish failure");
         String key = content.getId().toString();
         if (failure == PublishFailure.SYNCHRONOUS) {
-            doThrow(new IllegalStateException("send failed")).when(embeddingTemplate)
+            doThrow(new IllegalStateException(
+                    "send failed",
+                    new org.apache.kafka.common.errors.TimeoutException("broker timeout")
+            )).when(embeddingTemplate)
                     .send(eq(ContentSearchKafkaTopics.CONTENT_EMBEDDING), eq(key), any());
         } else if (failure == PublishFailure.FUTURE) {
-            doReturn(CompletableFuture.failedFuture(new IllegalStateException("broker failed")))
+            doReturn(CompletableFuture.failedFuture(new IllegalStateException(
+                    "broker failed",
+                    new org.apache.kafka.common.errors.TimeoutException("broker timeout")
+            )))
                     .when(embeddingTemplate).send(eq(ContentSearchKafkaTopics.CONTENT_EMBEDDING), eq(key), any());
         } else {
             CompletableFuture<SendResult<String, Object>> future = mock(CompletableFuture.class);
@@ -392,8 +603,91 @@ class ContentKafkaEmbeddingIntegrationTest {
         }
     }
 
+    private ConsumerRecord<String, byte[]> readFirstDltRecord() {
+        Map<String, Object> properties = KafkaTestUtils.consumerProps(
+                "dlt-test-" + UUID.randomUUID(), "false", broker
+        );
+        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        TopicPartition dltPartition = new TopicPartition(ContentSearchKafkaTopics.CONTENT_EMBEDDING_DLT, 0);
+        try (KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(
+                properties, new StringDeserializer(), new ByteArrayDeserializer()
+        )) {
+            consumer.assign(Collections.singleton(dltPartition));
+            consumer.seekToBeginning(Collections.singleton(dltPartition));
+            long deadline = System.nanoTime() + TIMEOUT.toNanos();
+            while (System.nanoTime() < deadline) {
+                var records = consumer.poll(Duration.ofMillis(250));
+                if (!records.isEmpty()) {
+                    return records.iterator().next();
+                }
+            }
+        }
+        throw new AssertionError("Embedding DLT record was not published");
+    }
+
+    private ConsumerRecord<byte[], byte[]> readSearchDltRecordByRawKey(byte[] expectedKey) {
+        Map<String, Object> properties = KafkaTestUtils.consumerProps(
+                "search-dlt-raw-key-" + UUID.randomUUID(), "false", broker
+        );
+        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        TopicPartition partition = new TopicPartition(ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT, 0);
+        try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(
+                properties, new ByteArrayDeserializer(), new ByteArrayDeserializer()
+        )) {
+            consumer.assign(Collections.singleton(partition));
+            consumer.seekToBeginning(Collections.singleton(partition));
+            long deadline = System.nanoTime() + TIMEOUT.toNanos();
+            while (System.nanoTime() < deadline) {
+                for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(250))) {
+                    if (java.util.Arrays.equals(expectedKey, record.key())) {
+                        return record;
+                    }
+                }
+            }
+        }
+        throw new AssertionError("Search DLT record with raw key was not published");
+    }
+
     private void awaitSearchCommit(RecordMetadata metadata) throws InterruptedException {
         await(() -> committedOffset(SEARCH_GROUP, metadata.topic()) > metadata.offset());
+    }
+
+    private void assertOffsetPreserved(
+            String group,
+            RecordMetadata source,
+            TopicPartition partition,
+            MessageListenerContainer listener
+    ) throws InterruptedException {
+        Long lastObserved = null;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            assertThat(listener.isPartitionPaused(partition)).isTrue();
+            long committed = committedOffset(group, source.topic());
+            assertThat(committed).isLessThanOrEqualTo(source.offset());
+            if (lastObserved != null) {
+                assertThat(committed).isEqualTo(lastObserved);
+            }
+            lastObserved = committed;
+            Thread.sleep(100);
+        }
+    }
+
+    private void stubDltPublishFailure(DltPublishFailure failure) {
+        if (failure == DltPublishFailure.SYNCHRONOUS) {
+            doThrow(new IllegalStateException("synchronous DLT send failure"))
+                    .when(dltTemplate).send(any(ProducerRecord.class));
+        } else if (failure == DltPublishFailure.FUTURE) {
+            doReturn(CompletableFuture.failedFuture(new IllegalStateException("DLT ACK failed")))
+                    .when(dltTemplate).send(any(ProducerRecord.class));
+        } else {
+            CompletableFuture<SendResult<Object, Object>> future = mock(CompletableFuture.class);
+            try {
+                when(future.get(anyLong(), eq(TimeUnit.MILLISECONDS)))
+                        .thenThrow(new TimeoutException("DLT ACK timeout"));
+            } catch (Exception exception) {
+                throw new IllegalStateException(exception);
+            }
+            doReturn(future).when(dltTemplate).send(any(ProducerRecord.class));
+        }
     }
 
     private void await(BooleanSupplier condition) throws InterruptedException {
@@ -408,6 +702,10 @@ class ContentKafkaEmbeddingIntegrationTest {
     }
 
     enum PublishFailure {
+        SYNCHRONOUS, FUTURE, TIMEOUT
+    }
+
+    enum DltPublishFailure {
         SYNCHRONOUS, FUTURE, TIMEOUT
     }
 }

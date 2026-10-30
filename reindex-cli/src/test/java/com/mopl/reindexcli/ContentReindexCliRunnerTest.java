@@ -1,7 +1,11 @@
 package com.mopl.reindexcli;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,6 +13,8 @@ import static org.mockito.Mockito.when;
 import com.mopl.content.search.service.ContentEmbeddingIndexer;
 import com.mopl.content.search.service.ContentSearchIndexer;
 import com.mopl.infrastructure.ai.config.AiAvailability;
+import com.mopl.core.common.kafka.ContentSearchKafkaTopics;
+import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -177,11 +183,53 @@ class ContentReindexCliRunnerTest {
         assertThat(runner.getExitCode()).isEqualTo(3);
     }
 
+    @Test
+    void dltReplayInvalidRecordReturnsInputErrorExitCode() {
+        ObjectProvider<DltReplayService> provider = mock(ObjectProvider.class);
+        DltReplayService replayService = mock(DltReplayService.class);
+        when(provider.getIfAvailable()).thenReturn(replayService);
+        doThrow(new IllegalArgumentException("선택한 DLT offset에 레코드가 없습니다"))
+                .when(replayService).replay(anyString(), anyInt(), anyLong());
+        ContentReindexCliRunner runner = createRunner(provider);
+
+        runner.run(dltReplayArguments());
+
+        assertThat(runner.getExitCode()).isEqualTo(2);
+    }
+
+    @Test
+    void dltReplayInfrastructureFailureReturnsInfrastructureExitCode() {
+        ObjectProvider<DltReplayService> provider = mock(ObjectProvider.class);
+        DltReplayService replayService = mock(DltReplayService.class);
+        when(provider.getIfAvailable()).thenReturn(replayService);
+        doThrow(new IllegalStateException("원본 Topic 재발행 ACK 실패"))
+                .when(replayService).replay(anyString(), anyInt(), anyLong());
+        ContentReindexCliRunner runner = createRunner(provider);
+
+        runner.run(dltReplayArguments());
+
+        assertThat(runner.getExitCode()).isEqualTo(3);
+    }
+
     private ContentReindexCliRunner createRunner() {
+        return createRunner(mock(ObjectProvider.class));
+    }
+
+    private ContentReindexCliRunner createRunner(ObjectProvider<DltReplayService> provider) {
         return new ContentReindexCliRunner(
                 contentSearchIndexer,
                 contentEmbeddingIndexer,
-                aiAvailability
+                aiAvailability,
+                provider
+        );
+    }
+
+    private DefaultApplicationArguments dltReplayArguments() {
+        return new DefaultApplicationArguments(
+                "--mopl.reindex.mode=DLT_REPLAY",
+                "--mopl.reindex.dlt.topic=" + ContentSearchKafkaTopics.CONTENT_SEARCH_SYNC_DLT,
+                "--mopl.reindex.dlt.partition=0",
+                "--mopl.reindex.dlt.offset=11"
         );
     }
 

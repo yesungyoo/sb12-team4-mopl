@@ -94,6 +94,30 @@ class KafkaListenerFailureRecovererTest {
                 .contains("Elasticsearch 연결 실패");
     }
 
+    @Test
+    void explicitPausePathKeepsOffsetEvenWhenFailureCauseIsDeserializationException() {
+        ConsumerRecord<String, Object> record = record();
+        Consumer<?, ?> consumer = mock(Consumer.class);
+        DeserializationException originalFailure = new DeserializationException(
+                "역직렬화 실패",
+                "invalid".getBytes(StandardCharsets.UTF_8),
+                false,
+                new IllegalArgumentException("잘못된 JSON")
+        );
+        RuntimeException dltFailure = new IllegalStateException("DLT ACK 실패", originalFailure);
+        TopicPartition topicPartition = new TopicPartition(record.topic(), record.partition());
+        MessageListenerContainer listenerContainer = mock(MessageListenerContainer.class);
+        when(listenerEndpointRegistry.getListenerContainers()).thenReturn(List.of(listenerContainer));
+        when(listenerContainer.getAssignedPartitions()).thenReturn(List.of(topicPartition));
+
+        assertThatThrownBy(() -> recoverer.pauseAndKeepOffset(record, consumer, dltFailure))
+                .isInstanceOf(IllegalStateException.class)
+                .hasCause(dltFailure);
+
+        verify(listenerContainer).pausePartition(topicPartition);
+        verifyNoInteractions(consumer);
+    }
+
     private ConsumerRecord<String, Object> record() {
         return new ConsumerRecord<>(
                 "content-search-sync",

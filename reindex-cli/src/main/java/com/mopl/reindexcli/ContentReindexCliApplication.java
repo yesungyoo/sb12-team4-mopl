@@ -8,6 +8,7 @@ import com.mopl.infrastructure.ai.config.AiAvailability;
 import com.mopl.infrastructure.ai.config.AiConfig;
 import com.mopl.infrastructure.ai.openai.OpenAiEmbeddingClient;
 import com.mopl.infrastructure.ai.openai.OpenAiRestClientFactory;
+import com.mopl.infrastructure.config.KafkaConfig;
 import com.mopl.infrastructure.config.QuerydslConfig;
 import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.SpringApplication;
@@ -41,6 +42,9 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
         ContentSearchIndexer.class,
         ContentEmbeddingIndexer.class,
         ContentEmbeddingService.class,
+        KafkaConfig.class,
+        DltReplayConfiguration.class,
+        DltReplayService.class,
         ContentReindexCliRunner.class,
         ReindexCliPersistenceSafetyConfiguration.class,
         AiAvailability.class,

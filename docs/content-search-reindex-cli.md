@@ -75,6 +75,28 @@ $env:MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEESFAILURES = "5"
 
 두 임계치는 각각 OpenAI Embedding 생성 실패와 Elasticsearch 저장 실패의 연속 허용 횟수입니다. 기본값은 각각 5이며 양수만 허용합니다. 환경 변수 이름은 Spring Boot의 relaxed binding 규칙에 맞춰 프로퍼티 이름의 하이픈을 제거한 형태입니다.
 
+## DLT_REPLAY — 선택 레코드 수동 재처리
+
+먼저 장애 원인을 해결하고 DLT Topic·Partition·Offset을 확인합니다. 재처리 도구는 해당
+레코드 하나만 읽고 consumer offset은 commit하지 않습니다. 원본 Topic 발행 ACK까지 확인한
+뒤 종료하므로 같은 명령을 다시 실행하면 중복 이벤트가 생길 수 있습니다. 재처리 전후의
+원본 group offset, DLT 위치, 콘텐츠 ID와 Elasticsearch 최종 상태를 기록하세요.
+DLT 재처리에는 `KAFKA_BOOTSTRAP_SERVERS` 또는 `spring.kafka.bootstrap-servers`도 설정해야 합니다.
+
+```powershell
+.\gradlew.bat :reindex-cli:bootRun --args="--mopl.reindex.mode=DLT_REPLAY --mopl.reindex.dlt.topic=content-search-sync-dlt --mopl.reindex.dlt.partition=0 --mopl.reindex.dlt.offset=42"
+```
+
+Embedding 실패는 `content-embedding-dlt`를 지정합니다. 일반 색인은 현재 MySQL의 활성/삭제
+상태를 기준으로 새 `content-search-sync` 이벤트를 만들고, Embedding은 현재 삭제 여부를
+확인한 뒤 기존 Consumer의 Hash·모델·조건부 벡터 갱신 검증을 다시 거칩니다. 존재하지 않거나
+삭제된 콘텐츠의 Embedding 레코드는 성공적으로 건너뜁니다.
+
+역직렬화 실패 DLT는 원본 raw bytes와 예외 헤더를 보존합니다. CLI는 해결되지 않은
+역직렬화 예외 헤더가 있거나 Type ID·JSON·Key/contentId 검증에 실패하면 재발행을 거부합니다.
+원본 데이터나 Type ID를 임의 수정해 재발행하지 말고, 원인을 확인해 별도 복구 절차를 마련하세요.
+DLT 레코드 자체는 삭제되지 않으며, 재처리를 반복하면 원본 이벤트가 중복될 수 있습니다.
+
 | 환경 변수 | 실제 Spring 프로퍼티 |
 | --- | --- |
 | `MOPL_ELASTICSEARCH_EMBEDDINGBACKFILL_MAXCONSECUTIVEFAILURES` | `mopl.elasticsearch.embedding-backfill.max-consecutive-failures` |
@@ -105,8 +127,16 @@ Embedding 모드는 같은 JAR 명령에서 모드만 바꾸고 `MOPL_AI_ENABLED
 | --- | --- | --- |
 | `0` | 선택한 작업이 실패 또는 미처리 없이 끝남 | Backfill의 `skipped`에는 `STALE_REJECTED`뿐 아니라 이미 최신인 문서, Elasticsearch 문서 없음, MySQL에서 찾을 수 없거나 삭제된 콘텐츠 등이 포함됩니다. `STALE_REJECTED`는 OpenAI 호출 전 hash 확인 단계와 생성 후 조건부 저장 단계 모두에서 발생할 수 있습니다. 따라서 종료 코드 `0`만으로 전체 문서의 embedding 정합성을 단정하지 말고 실행 요약과 실제 stale 로그를 확인하세요. |
 | `1` | Embedding Backfill에서 한 건 이상 실패·미처리가 발생했거나 조기 중단됨 | 실행 로그의 성공·실패·건너뜀·미처리 수와 중단 사유를 확인합니다. OpenAI 401/403이면 Key와 권한을 수정하고, 연속 실패 중단이면 장애 원인을 해결한 뒤 다시 실행합니다. |
-| `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA` 또는 `EMBEDDING_BACKFILL`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. |
+| `2` | 모드 오류, 필수 DB·Elasticsearch 설정 누락, Backfill의 AI 비활성화·API Key 누락 또는 실패 임계치의 0 이하 값처럼 CLI가 명시적으로 검사한 설정 오류 | 모드를 `SYNC_DATA`, `EMBEDDING_BACKFILL` 또는 `DLT_REPLAY`로 지정합니다. 접속 설정을 확인하고, Backfill이면 AI 활성화와 API Key 및 두 실패 임계치가 양수인지 확인합니다. DLT_REPLAY이면 DLT Topic·Partition·Offset과 재처리 가능한 레코드인지 확인합니다. |
 | `3` | 위 설정 오류 이외의 기동 실패, DB 연결·Hibernate 스키마 검증 실패 또는 작업 전체로 전파된 DB·Elasticsearch 처리 예외 | 환경 변수의 값 형식, DB 스키마와 인프라 상태 및 원인 예외를 확인하고 복구한 뒤 같은 모드로 재실행합니다. |
+
+### DLT_REPLAY 종료 코드
+
+| 코드 | 의미 | 대응 |
+| --- | --- | --- |
+| `0` | 선택 레코드 재발행 ACK 확인 완료. 현재 DB에서 삭제되었거나 없는 Embedding 콘텐츠는 정상 건너뜀으로 종료될 수도 있음 | 로그의 `sent`와 `sourceTopic`, 콘텐츠 ID를 확인합니다. 건너뜀인 경우 현재 DB 삭제 상태를 확인합니다. |
+| `2` | 잘못된 입력, 범위 밖이거나 존재하지 않는 DLT Offset, 해결되지 않은 역직렬화 오류 등 재처리할 수 없는 레코드. 필수 Kafka bootstrap 설정 누락도 포함 | DLT Topic·Partition·Offset과 레코드의 Type ID·Key·Value·예외 헤더를 확인합니다. 잘못된 위치 또는 재처리 불가 레코드는 원인을 해결하기 전 재발행하지 않습니다. |
+| `3` | DLT 레코드 조회 중 Kafka 인프라 장애, DB 상태 조회 등 실행 중 인프라 예외 또는 원본 Topic 재발행 ACK 실패 | Kafka·DB 연결과 인증·권한, Producer 상태를 확인합니다. ACK timeout은 늦은 발행이 도착했을 수 있으므로 재실행 전에 원본 Topic을 확인해 중복 발행을 방지합니다. |
 
 `SYNC_DATA` 처리 중 발생한 예외는 종료 코드 `3`입니다. Backfill에서는 개별 Embedding 생성 실패나 개별 Elasticsearch 업데이트 실패를 집계해 종료 코드 `1`로 반환하지만, Elasticsearch Scroll 조회, MySQL 배치 조회 또는 마지막 Refresh처럼 작업 전체로 전파된 예외는 종료 코드 `3`입니다.
 

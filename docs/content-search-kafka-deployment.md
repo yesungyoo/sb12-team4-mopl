@@ -20,8 +20,8 @@
 발행되지 않으며 오류 로그가 남는다. 운영 환경에서는 Batch와 API 모두에
 bootstrap 서버가 설정되었는지 배포 전에 확인해야 한다.
 
-현재 범위에는 Outbox와 DLT가 없다. DB 커밋 후 Kafka 발행이 실패한 이벤트를
-자동으로 복원하지 않으므로 관련 오류 로그를 운영 알림 대상으로 관리해야 한다.
+Transactional Outbox는 아직 없다. DB 커밋 후 첫 Kafka 발행이 실패한 이벤트는
+Consumer DLT로 복구되지 않으므로 관련 오류 로그를 운영 알림 대상으로 관리해야 한다.
 
 ## Producer 제한 시간
 
@@ -47,9 +47,11 @@ Producer 설정은 변경하지 않는다. 완료 대기 시간은 메타데이�
 현재 `linger.ms`는 0으로 설정되며, 조건을 위반하면 Batch Producer Bean 초기화
 단계에서 실패한다.
 
-## Consumer 일반 처리 오류
+## 기존 공통 Consumer 재시도 설정
 
-일반 Listener 처리 오류는 다음 설정에 따라 재시도한다.
+아래 공통 설정은 기존 공통 ErrorHandler를 사용하는 Listener에 적용한다.
+콘텐츠 일반 색인과 Embedding은 전용 ErrorHandler를 사용하며, 각각의 별도 설정이
+없으면 아래 retry 간격·횟수를 fallback 값으로 사용한다.
 
 | 설정 | 기본값 | 의미 |
 | --- | ---: | --- |
@@ -59,11 +61,80 @@ Producer 설정은 변경하지 않는다. 완료 대기 시간은 메타데이�
 기존 `mopl.kafka.consumer.retry-max-attempts` 설정도 호환을 위해 계속 지원하며,
 두 설정이 모두 있으면 `retry-max-retries`를 우선 적용한다.
 
-재시도를 모두 소진하면 Listener 컨테이너에 실패 파티션 중지를 요청하고 해당
-Offset을 유지한다. 컨테이너가 중지 요청을 관리하므로 Consumer 재할당 후에도
-파티션을 다시 중지한다. Elasticsearch 장애가 해소된 뒤에는 운영자가 컨테이너의
-해당 파티션을 명시적으로 재개하거나 API 인스턴스를 재시작해야 한다. 역직렬화
-실패는 기존 정책대로 복구 로그를 남기고 Offset을 진행한다.
+Issue #15 PR2 이후 콘텐츠 일반 색인과 Embedding은 각각 전용 ErrorHandler를 사용한다.
+Elasticsearch의 레코드 파싱 오류처럼 개별 레코드의 영구 오류는 재시도 없이 DLT로
+이동한다. 그 밖의 레코드별·원인 불명 오류는 기본 1초 간격 3회 추가 재시도 후 DLT로
+이동한다. Elasticsearch I/O 연결 오류와 MySQL 연결 장애는 기본 1초 간격 3회 추가
+재시도한 뒤 해당 Consumer 파티션을 Pause하고 Offset을 유지한다.
+
+Elasticsearch 429는 응답 본문과 관계없이 불필요한 재시도 없이 즉시 파티션을 Pause한다.
+OpenAI 429는 응답 본문을 확인해 분류한다. rate limit 응답은 유한 재시도 후 파티션을
+Pause하고, quota 오류와 원인 불명 응답은 재시도 없이 Pause한다. 인덱스 부재, 인증·권한·
+설정 장애와 원인 불명 Elasticsearch 400도 파티션을 Pause하고 Offset을 유지한다. 다른
+Listener와 Batch는 기존 공통 ErrorHandler를 계속 사용한다.
+
+Elasticsearch와 OpenAI의 HTTP 408 및 500/502/503/504 오류는 기본 1초 간격 3회 추가
+재시도한 뒤 해당 Consumer 파티션을 Pause하고 Offset을 유지한다.
+
+DLT 브로커 ACK를 확인한 뒤에만 원본 Offset이 진행된다. DLT 발행 예외·실패·timeout이면
+기존 `KafkaListenerFailureRecoverer`로 해당 파티션을 Pause하고 원본 Offset을 보존한다.
+timeout 직후 늦은 브로커 ACK가 도착하면 재개 후 같은 DLT 레코드가 중복될 수 있으므로
+중복을 허용하고 DLT와 원본의 Key·offset을 대조한다.
+
+공통 장애 파티션은 PR2에서 자동 재개하지 않는다. PR2는 runtime resume용 관리 API/JMX를
+추가하지 않으므로 기본 운영 절차는 장애 원인을 고친 뒤 원본 consumer group offset과 lag를
+기록하고 API 인스턴스를 재시작하는 것이다. 내부 관리 채널에서
+`KafkaListenerEndpointRegistry`를 이미 제어할 수 있는 경우에만 대상 Listener ID와
+TopicPartition을 확인해 파티션을 명시적으로 재개한다. 재개 뒤 같은 레코드가 재전달될 수
+있으므로 최신 DB 상태와 Elasticsearch 상태를 확인한다. 장기 중지 시 원본 Topic retention을
+넘기지 않도록 확인한다.
+
+## 콘텐츠 DLT Topic
+
+| 설정 | 기본값 | 용도 |
+| --- | ---: | --- |
+| Topic | `content-search-sync-dlt`, `content-embedding-dlt` | 일반 색인·Embedding 별도 실패 보관 |
+| `mopl.kafka.dlt.partitions` | 1 | 각 DLT 파티션 수. 원본 partition 번호로 발행하므로 원본보다 작게 둘 수 없음 |
+| `mopl.kafka.dlt.replicas` | 1 | 로컬 기본값. 운영 브로커 수와 내구성 요구에 맞게 설정 |
+| `mopl.kafka.dlt.retention-ms` | 2592000000 (30일) | DLT 보존 기간 |
+| `mopl.kafka.dlt.producer.max-block-ms` | 3000ms | Producer 메타데이터·버퍼 대기 제한 |
+| `mopl.kafka.dlt.producer.request-timeout-ms` | 5000ms | 브로커 요청 대기 제한 |
+| `mopl.kafka.dlt.producer.delivery-timeout-ms` | 10000ms | Producer 전송 완료 제한 |
+| `mopl.kafka.dlt.producer.ack-timeout-ms` | 15000ms | Recoverer의 전송 결과 확인 대기 |
+
+Producer는 `acks=all`, idempotence를 사용한다. 설정 검증은
+`delivery-timeout-ms >= request-timeout-ms`와
+`ack-timeout-ms >= delivery-timeout-ms`를 요구한다. `max-block-ms`는 `send()` Future가
+반환되기 전 메타데이터 대기이고 ACK 제한은 Future 완료 대기이므로 전체 최대 대기에는
+두 구간이 합산될 수 있다. DLT 파티션 번호를 보존하므로 DLT 파티션 수는 해당 원본 Topic의
+파티션 수 이상이어야 한다. 기존 원본 Topic partition 설정은 자동 변경하지 않는다.
+
+DLT 레코드는 원래 Key·이벤트 Value·Type ID와 Spring Kafka의 원본 Topic/Partition/Offset,
+예외 유형·메시지 헤더를 보존한다. 헤더 크기와 불필요한 본문 노출을 줄이기 위해 stack trace는
+넣지 않는다. Key 또는 Value 역직렬화 실패는 실패한 원본 `byte[]`를 보관한다. 처리 원인이 해결되지
+않은 역직렬화 실패 레코드는 수동 재처리 CLI가 거부한다.
+
+KafkaAdmin은 새 DLT를 기본 설정으로 생성한다. 이미 존재하는 DLT의 partition 수나 retention
+설정은 기존 Topic 설정에 자동으로 덮어쓰지 않으므로 운영자가 배포 전에 Broker 설정을 확인한다.
+
+일반 색인과 Embedding의 추가 재시도 기본값은 각각 1초 간격 3회다. 개별 설정은
+`mopl.kafka.content-search-sync.retry-interval-ms`,
+`mopl.kafka.content-search-sync.retry-max-retries`,
+`mopl.kafka.embedding.consumer.retry-interval-ms`,
+`mopl.kafka.embedding.consumer.retry-max-retries`로 조정할 수 있다. 공통 장애 자동 판정과
+자동 재개는 PR3 범위이며 PR2에는 수동 재개만 있다.
+
+## 콘텐츠 DLT 선별 재처리
+
+`reindex-cli`의 `DLT_REPLAY`는 운영자가 지정한 DLT Topic·Partition·Offset 하나만 읽고,
+원본 Topic에 새 이벤트를 발행한다. DLT consumer offset을 commit하지 않으며 원본 발행 ACK를
+확인한다. 같은 명령을 다시 실행하면 중복 발행될 수 있다.
+
+일반 색인은 현재 MySQL에서 삭제 여부를 다시 계산해 `content-search-sync`로 발행한다.
+Embedding은 삭제/부재 콘텐츠이면 건너뛰고 활성 콘텐츠이면 `content-embedding`으로 발행한다.
+기존 Consumer가 최신 DB 상태, Hash, 모델 및 문서 상태를 검사한다. DLT는 자동 소비되지 않는다.
+먼저 장애 원인과 선택 레코드를 확인하고, 원본 group offset·DLT offset을 기록한 뒤 한 건씩
+재처리하고 Elasticsearch 결과와 로그를 확인한다. 운영 명령과 raw-byte 제한은 [CLI 안내](./content-search-reindex-cli.md)에 있다.
 
 ## 외부 콘텐츠 ID
 
@@ -187,7 +258,8 @@ Listener별로 덮어쓰는 기능을 사용한다. `max.poll.records`도 이 �
 `AiAvailability`가 비활성 또는 API Key 누락을 판단하면 일반 색인은 계속하지만
 Embedding 이벤트는 발행하지 않는다. 전용 Listener ID는 `content-embedding-consumer`이며,
 Bean은 등록되어도 `autoStartup=false`여서 backlog를 소비하지 않는다.
-비활성 Listener를 강제로 시작하더라도 메시지를 no-op ACK하지 않고 오류를 전파한다.
+비활성 Listener를 수동으로 시작하더라도 `AiUnavailableException`이 발생해 해당 파티션을
+즉시 Pause하고 Offset을 보존한다. 메시지를 no-op ACK하거나 DLT로 보내지 않는다.
 
 `autoStartup`은 기동 시 평가되며 환경변수 변경을 자동 감지하지 않는다.
 현재 `AiAvailability` 설정도 기동 시 주입되므로 AI 활성 플래그·Key를 변경했다면

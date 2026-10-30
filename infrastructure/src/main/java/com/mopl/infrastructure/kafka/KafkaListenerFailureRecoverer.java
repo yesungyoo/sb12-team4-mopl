@@ -39,6 +39,15 @@ public class KafkaListenerFailureRecoverer
             return;
         }
 
+        pauseAndKeepOffset(record, consumer, exception);
+    }
+
+    public void pauseAndKeepOffset(
+            ConsumerRecord<?, ?> record,
+            Consumer<?, ?> consumer,
+            Exception exception
+    ) {
+
         TopicPartition failedPartition = new TopicPartition(
                 record.topic(),
                 record.partition()
