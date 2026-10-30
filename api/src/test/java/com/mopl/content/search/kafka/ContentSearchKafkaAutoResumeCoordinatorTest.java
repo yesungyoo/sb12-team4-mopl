@@ -316,6 +316,10 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         verifyReassignmentToNewOwnerResumes(Dependency.MYSQL, mysqlTransientFailure());
     }
 
+    // 아래 두 테스트에 공통 적용되는 방어적 시나리오다. Spring Kafka 3.3.x의
+    // ConcurrentMessageListenerContainer는 부모 Stop/Start 시 child 컨테이너를 새로 생성하므로,
+    // 일반적인 Stop/Start 동작을 재현하지 않는다. 기존 child 객체와 Pause 요청이 남아 재사용되는
+    // 경우에도 복구 상태가 안전한지 확인한다.
     @Test
     void reusedChildRetainsElasticsearchRecoveryAcrossListenerStopStart() {
         verifyReusedChildRecoveryAcrossStopStart(Dependency.ELASTICSEARCH, esTransientFailure());

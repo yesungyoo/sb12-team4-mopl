@@ -111,6 +111,12 @@ Probe timeout·실패는 성공 횟수에 반영하지 않으며 같은 의존�
 재시작한다. 재개 후 원본 레코드가 다시 전달될 수 있으므로 DB 최신 상태, Elasticsearch 문서와
 Embedding Hash를 확인한다. 장기 중지 시 원본 Topic retention을 넘기지 않도록 관리한다.
 
+현재 자동 복구 Coordinator는 자동 Pause와 운영자의 수동 Pause를 별도 사유로 관리하지 않는다.
+따라서 자동 복구 중인 파티션에 수동 Pause를 요청하면 Elasticsearch 또는 MySQL 복구 후 Coordinator의
+자동 Resume이 운영자의 수동 중지 의도와 충돌할 수 있다. 현재 자동 복구 추적 상태를 정확히 조회하는
+운영 API나 메트릭은 제공되지 않으며, 자동 복구 등록·Resume 로그만으로 현재 추적 여부나 수동 Pause의
+안전성을 보장할 수 없다. Pause 사유별 상태 관리와 운영 조회 기능은 별도 후속 이슈에서 개선할 예정이다.
+
 ## 콘텐츠 DLT Topic
 
 | 설정 | 기본값 | 용도 |
