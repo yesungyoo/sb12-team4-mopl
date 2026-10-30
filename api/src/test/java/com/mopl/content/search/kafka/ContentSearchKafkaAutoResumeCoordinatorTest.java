@@ -45,9 +45,12 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
         MessageListenerContainer container = pausedAssignedContainer(registry);
         AtomicBoolean paused = new AtomicBoolean(true);
+        AtomicBoolean pauseRequested = new AtomicBoolean(true);
         when(container.isPartitionPaused(PARTITION)).thenAnswer(invocation -> paused.get());
+        when(container.isPartitionPauseRequested(PARTITION)).thenAnswer(invocation -> pauseRequested.get());
         doAnswer(invocation -> {
             paused.set(false);
+            pauseRequested.set(false);
             return null;
         }).when(container).resumePartition(PARTITION);
 
@@ -79,6 +82,7 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
 
         coordinator.probePausedPartitions();
         assertThat(coordinator.trackedPauseCount()).isZero();
+        assertThat(pauseRequested).isFalse();
         assertThat(probeCount).hasValue(3);
         coordinator.shutdown();
     }
@@ -257,10 +261,13 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         MessageListenerContainer container = pausedAssignedContainer(registry);
         MessageListenerContainer owner = pausedOwner(Set.of(PARTITION));
         AtomicBoolean paused = new AtomicBoolean(true);
+        AtomicBoolean pauseRequested = new AtomicBoolean(true);
         when(container.getContainerFor(PARTITION.topic(), PARTITION.partition())).thenReturn(owner);
         when(owner.isPartitionPaused(PARTITION)).thenAnswer(invocation -> paused.get());
+        when(owner.isPartitionPauseRequested(PARTITION)).thenAnswer(invocation -> pauseRequested.get());
         doAnswer(invocation -> {
             paused.set(false);
+            pauseRequested.set(false);
             return null;
         }).when(owner).resumePartition(PARTITION);
         AtomicInteger probeCount = new AtomicInteger();
@@ -310,6 +317,81 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
     }
 
     @Test
+    void reusedChildRetainsElasticsearchRecoveryAcrossListenerStopStart() {
+        verifyReusedChildRecoveryAcrossStopStart(Dependency.ELASTICSEARCH, esTransientFailure());
+    }
+
+    @Test
+    void reusedChildRetainsMysqlRecoveryAcrossListenerStopStart() {
+        verifyReusedChildRecoveryAcrossStopStart(Dependency.MYSQL, mysqlTransientFailure());
+    }
+
+    @Test
+    void recreatedChildDoesNotReceiveStaleResumeWhenPauseRequestWasNotTransferred() {
+        KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
+        MessageListenerContainer parent = mock(MessageListenerContainer.class);
+        when(registry.getListenerContainer(LISTENER_ID)).thenReturn(parent);
+        AtomicBoolean listenerRunning = new AtomicBoolean(true);
+        AtomicReference<Set<TopicPartition>> parentAssigned = new AtomicReference<>(Set.of(PARTITION));
+        when(parent.isRunning()).thenAnswer(invocation -> listenerRunning.get());
+        when(parent.getAssignedPartitions()).thenAnswer(invocation -> parentAssigned.get());
+
+        MessageListenerContainer oldChild = mock(MessageListenerContainer.class);
+        AtomicBoolean oldChildRunning = new AtomicBoolean(true);
+        AtomicBoolean oldChildPaused = new AtomicBoolean(true);
+        AtomicBoolean oldChildPauseRequested = new AtomicBoolean(true);
+        AtomicReference<Set<TopicPartition>> oldChildAssigned = new AtomicReference<>(Set.of(PARTITION));
+        configureRestartOwner(oldChild, oldChildRunning, oldChildAssigned, oldChildPaused, oldChildPauseRequested);
+
+        MessageListenerContainer newChild = mock(MessageListenerContainer.class);
+        AtomicReference<MessageListenerContainer> currentChild = new AtomicReference<>(oldChild);
+        AtomicBoolean newChildPaused = new AtomicBoolean(false);
+        AtomicBoolean newChildPauseRequested = new AtomicBoolean(false);
+        AtomicReference<Set<TopicPartition>> newChildAssigned = new AtomicReference<>(Set.of());
+        configureRestartOwner(newChild, new AtomicBoolean(true), newChildAssigned,
+                newChildPaused, newChildPauseRequested);
+        when(parent.getContainerFor(PARTITION.topic(), PARTITION.partition()))
+                .thenAnswer(invocation -> currentChild.get());
+
+        MutableClock clock = new MutableClock();
+        ContentSearchKafkaAutoResumeCoordinator coordinator = coordinator(
+                registry, Dependency.ELASTICSEARCH, clock, (probe, timeout) -> true
+        );
+        coordinator.recordFailure(LISTENER_ID, PARTITION, 42,
+                ContentSearchKafkaAutoResumeCoordinator.PauseReason.COMMON_TRANSIENT, esTransientFailure());
+        coordinator.probePausedPartitions();
+
+        coordinator.onPartitionsRevoked(LISTENER_ID, List.of(PARTITION));
+        listenerRunning.set(false);
+        parentAssigned.set(Set.of());
+        oldChildRunning.set(false);
+        oldChildAssigned.set(Set.of());
+        oldChildPaused.set(false);
+        assertThat(oldChildPauseRequested).isTrue();
+        coordinator.probePausedPartitions();
+        assertThat(coordinator.trackedPauseCount())
+                .as("정지 중 실제 Pause가 풀려도 요청 marker가 남아 있으면 복구 자격을 보존합니다")
+                .isEqualTo(1);
+
+        listenerRunning.set(true);
+        currentChild.set(newChild);
+        parentAssigned.set(Set.of(PARTITION));
+        newChildAssigned.set(Set.of(PARTITION));
+        coordinator.onPartitionsAssigned(LISTENER_ID, List.of(PARTITION));
+        coordinator.probePausedPartitions();
+        assertThat(coordinator.trackedPauseCount()).isEqualTo(1);
+        assertThat(newChildPaused).isFalse();
+        assertThat(newChildPauseRequested).isFalse();
+
+        clock.advanceMillis(31);
+        coordinator.probePausedPartitions();
+        assertThat(coordinator.trackedPauseCount()).isZero();
+        verify(oldChild, never()).resumePartition(PARTITION);
+        verify(newChild, never()).resumePartition(PARTITION);
+        coordinator.shutdown();
+    }
+
+    @Test
     void concurrentChildrenCanReassignAFirstWithoutDeletingBRecoveryState() {
         verifyConcurrentChildReassignmentPreservesBothStates(true);
     }
@@ -327,13 +409,17 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         MessageListenerContainer currentOwner = pausedOwner(Set.of(PARTITION));
         AtomicReference<MessageListenerContainer> assignedOwner = new AtomicReference<>(formerOwner);
         AtomicBoolean formerOwnerPaused = new AtomicBoolean(true);
+        AtomicBoolean formerOwnerPauseRequested = new AtomicBoolean(true);
         when(container.getContainerFor(PARTITION.topic(), PARTITION.partition()))
                 .thenAnswer(invocation -> assignedOwner.get());
         when(formerOwner.isPartitionPaused(PARTITION)).thenAnswer(invocation -> formerOwnerPaused.get());
+        when(formerOwner.isPartitionPauseRequested(PARTITION))
+                .thenAnswer(invocation -> formerOwnerPauseRequested.get());
         when(currentOwner.isPartitionPaused(PARTITION)).thenReturn(false);
         when(currentOwner.isPartitionPauseRequested(PARTITION)).thenReturn(false);
         doAnswer(invocation -> {
             formerOwnerPaused.set(false);
+            formerOwnerPauseRequested.set(false);
             return null;
         }).when(formerOwner).resumePartition(PARTITION);
         AtomicInteger probeCount = new AtomicInteger();
@@ -527,6 +613,94 @@ class ContentSearchKafkaAutoResumeCoordinatorTest {
         coordinator.probePausedPartitions();
         assertThat(coordinator.trackedPauseCount()).isZero();
         coordinator.shutdown();
+    }
+
+    private void verifyReusedChildRecoveryAcrossStopStart(
+            Dependency dependency,
+            FailureClassification failure
+    ) {
+        KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
+        MessageListenerContainer parent = mock(MessageListenerContainer.class);
+        when(registry.getListenerContainer(LISTENER_ID)).thenReturn(parent);
+        AtomicBoolean listenerRunning = new AtomicBoolean(true);
+        AtomicReference<Set<TopicPartition>> parentAssigned = new AtomicReference<>(Set.of(PARTITION));
+        when(parent.isRunning()).thenAnswer(invocation -> listenerRunning.get());
+        when(parent.getAssignedPartitions()).thenAnswer(invocation -> parentAssigned.get());
+
+        MessageListenerContainer reusedChild = mock(MessageListenerContainer.class);
+        AtomicBoolean childRunning = new AtomicBoolean(true);
+        AtomicBoolean childPaused = new AtomicBoolean(true);
+        AtomicBoolean childPauseRequested = new AtomicBoolean(true);
+        AtomicReference<Set<TopicPartition>> childAssigned = new AtomicReference<>(Set.of(PARTITION));
+        configureRestartOwner(reusedChild, childRunning, childAssigned, childPaused, childPauseRequested);
+        when(parent.getContainerFor(PARTITION.topic(), PARTITION.partition())).thenReturn(reusedChild);
+        doAnswer(invocation -> {
+            childPaused.set(false);
+            childPauseRequested.set(false);
+            return null;
+        }).when(reusedChild).resumePartition(PARTITION);
+
+        AtomicInteger probeCount = new AtomicInteger();
+        MutableClock clock = new MutableClock();
+        ContentSearchKafkaAutoResumeCoordinator coordinator = coordinator(
+                registry, dependency, clock, (probe, timeout) -> {
+                    probeCount.incrementAndGet();
+                    return true;
+                }
+        );
+        coordinator.recordFailure(LISTENER_ID, PARTITION, 42,
+                ContentSearchKafkaAutoResumeCoordinator.PauseReason.COMMON_TRANSIENT, failure);
+        coordinator.probePausedPartitions();
+
+        coordinator.onPartitionsRevoked(LISTENER_ID, List.of(PARTITION));
+        listenerRunning.set(false);
+        parentAssigned.set(Set.of());
+        childRunning.set(false);
+        childAssigned.set(Set.of());
+        childPaused.set(false);
+        coordinator.probePausedPartitions();
+
+        assertThat(coordinator.trackedPauseCount()).isEqualTo(1);
+        assertThat(probeCount).hasValue(0);
+        assertThat(childPauseRequested).isTrue();
+
+        listenerRunning.set(true);
+        childRunning.set(true);
+        parentAssigned.set(Set.of(PARTITION));
+        childAssigned.set(Set.of(PARTITION));
+        coordinator.onPartitionsAssigned(LISTENER_ID, List.of(PARTITION));
+        coordinator.probePausedPartitions(); // request remains, but actual Pause has not yet been applied
+        assertThat(coordinator.trackedPauseCount()).isEqualTo(1);
+        assertThat(probeCount).hasValue(0);
+        verify(reusedChild, never()).resumePartition(PARTITION);
+
+        childPaused.set(true); // Spring Kafka applies the retained request on the consumer thread
+        coordinator.probePausedPartitions();
+        clock.advanceMillis(10);
+        coordinator.probePausedPartitions();
+        coordinator.probePausedPartitions();
+        verify(reusedChild, never()).resumePartition(PARTITION);
+        coordinator.probePausedPartitions();
+
+        verify(reusedChild).resumePartition(PARTITION);
+        assertThat(probeCount).hasValue(3);
+        assertThat(childPauseRequested).isFalse();
+        coordinator.probePausedPartitions();
+        assertThat(coordinator.trackedPauseCount()).isZero();
+        coordinator.shutdown();
+    }
+
+    private void configureRestartOwner(
+            MessageListenerContainer owner,
+            AtomicBoolean running,
+            AtomicReference<Set<TopicPartition>> assigned,
+            AtomicBoolean paused,
+            AtomicBoolean pauseRequested
+    ) {
+        when(owner.isRunning()).thenAnswer(invocation -> running.get());
+        when(owner.getAssignedPartitions()).thenAnswer(invocation -> assigned.get());
+        when(owner.isPartitionPaused(PARTITION)).thenAnswer(invocation -> paused.get());
+        when(owner.isPartitionPauseRequested(PARTITION)).thenAnswer(invocation -> pauseRequested.get());
     }
 
     private void assignConcurrentPartition(
